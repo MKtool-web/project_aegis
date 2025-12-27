@@ -7,7 +7,9 @@ import altair as alt
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
+# 🚨 여기가 V8.1로 되어 있어야 진짜입니다!
 st.set_page_config(page_title="Project Aegis V8.1", layout="wide")
+
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -69,7 +71,7 @@ def log_cash_flow(date, type_, krw, usd, rate):
 # ==========================================
 # 3. 메인 로직
 # ==========================================
-st.title("🛡️ Project Aegis V8.1 (UI Fix)")
+st.title("🛡️ Project Aegis V8.1 (Dashboard)")
 
 try:
     df_stock = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0).sort_values(by="Date", ascending=False).fillna(0)
@@ -118,7 +120,7 @@ cash_usd_to_krw = my_wallet.get('USD', 0) * krw_rate
 total_asset = total_stock_val_krw + cash_krw + cash_usd_to_krw
 
 # ==========================================
-# 4. 사이드바 (UI 버그 수정됨!)
+# 4. 사이드바 (UI 개선판)
 # ==========================================
 st.sidebar.header("🏦 자금 관리")
 c1, c2 = st.sidebar.columns(2)
@@ -127,23 +129,22 @@ c2.metric("🇺🇸 달러", f"${my_wallet.get('USD',0):.2f}")
 
 mode = st.sidebar.radio("메뉴", ["주식 거래", "입금/환전"], horizontal=True)
 
-# 🔥 [수정] 선택 박스를 폼 밖으로 꺼냄 (즉시 반응하게 함)
+# 🔥 폼 밖에서 선택 (즉시 반응)
 if mode == "입금/환전":
     act_type = st.selectbox("종류", ["원화 입금 (Deposit)", "달러 환전 (Exchange)"])
 else:
-    act_type = None # 주식 거래일 땐 무시
+    act_type = None
 
 with st.sidebar.form("input"):
     date = st.date_input("날짜", datetime.today())
     
     if mode == "입금/환전":
-        # 폼 밖에서 선택한 act_type을 사용
         label_amt = "입금할 원화 금액" if "Deposit" in act_type else "환전에 쓴 원화 금액"
         amount_krw = st.number_input(label_amt, step=10000)
         
         ex_rate_in = krw_rate
         if "Exchange" in act_type:
-            # 🔥 이제 '달러 환전' 선택 시 이 칸이 바로 보입니다!
+            # 🔥 환전 선택 시 이 칸이 바로 보여야 정상!
             ex_rate_in = st.number_input("적용 환율", value=krw_rate, format="%.2f")
             if ex_rate_in > 0:
                 st.caption(f"💵 예상 획득: ${amount_krw / ex_rate_in:.2f}")
@@ -165,13 +166,11 @@ with st.sidebar.form("input"):
             st.rerun()
 
     else: # 주식 거래
-        # 주식 거래용 변수들도 폼 밖으로 빼면 더 좋지만, 여기선 form 안에 둠
-        # (종목 바뀔 때마다 깜빡이는 게 싫다면 form 유지가 낫음)
         ticker = st.selectbox("종목", ["SGOV", "SPYM", "QQQM", "GMMF"])
         action = st.selectbox("유형", ["BUY", "SELL", "DIVIDEND"])
         qty = st.number_input("수량 (배당은 1)", value=1.0)
         
-        # 라벨 변경을 위해 간단한 트릭 (키값 변경)
+        # 🔥 배당 선택 시 '배당금 총액'으로 라벨 변경
         price_label = "배당금 총액 ($)" if action == "DIVIDEND" else "체결 단가 ($)"
         cur_p = 0.0
         if action != "DIVIDEND": cur_p = get_current_price(ticker)
@@ -207,7 +206,7 @@ st.sidebar.markdown("---")
 if st.sidebar.button("🔔 텔레그램 테스트"): send_test_message()
 
 # ==========================================
-# 5. 대시보드
+# 5. 대시보드 (차트 포함)
 # ==========================================
 tab1, tab2 = st.tabs(["📊 자산 & 차트", "📋 기록 장부"])
 
@@ -223,6 +222,7 @@ with tab1:
 
     st.markdown("---")
 
+    # 🔥 여기가 차트 영역입니다!
     c_chart1, c_chart2 = st.columns(2)
     with c_chart1:
         st.subheader("🍩 자산 구성")
