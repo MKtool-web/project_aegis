@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V12.0 (Visual Master)", layout="wide")
+st.set_page_config(page_title="Project Aegis V13.0 (Tax Guard)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -42,15 +42,14 @@ def get_usd_krw():
     except: return 1450.0
 
 def calculate_wallet_balance_detail(df_stock, df_cash):
+    # (이전 버전과 동일: 잔고 계산 로직)
     krw_deposit = 0
     krw_used = 0
     usd_gained = 0
-    
     if not df_cash.empty:
         for col in ['Amount_KRW', 'Amount_USD']:
             if col in df_cash.columns:
                 df_cash[col] = pd.to_numeric(df_cash[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
-        
         krw_deposit = df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
         krw_used = df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
         usd_gained = df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
@@ -60,7 +59,7 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     stock_details = []
 
     if not df_stock.empty:
-        for col in ['Qty', 'Price', 'Fee']:
+        for col in ['Qty', 'Price', 'Fee', 'Exchange_Rate']:
             if col in df_stock.columns:
                 df_stock[col] = pd.to_numeric(df_stock[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
 
@@ -85,13 +84,75 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     current_krw = krw_deposit - krw_used
     current_usd = usd_gained - usd_spent + usd_earned
     
+    return {'KRW': current_krw, 'USD': current_usd, 'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Detail_USD_Earned': usd_earned, 'Stock_Log': stock_details}
+
+# 🔥 [NEW] 세금 계산 엔진 (이동평균법)
+def calculate_tax_guard(df_stock):
+    if df_stock.empty:
+        return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
+
+    # 날짜순 정렬 (필수)
+    df = df_stock.copy()
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values(by='Date')
+
+    # 포트폴리오 상태 추적
+    holdings = {} # {ticker: {'qty': 0, 'total_cost_krw': 0}}
+    
+    current_year = datetime.now().year
+    realized_profit_krw = 0
+    tax_log = []
+
+    for _, row in df.iterrows():
+        ticker = row['Ticker']
+        qty = row['Qty']
+        price = row['Price']
+        fee = row['Fee']
+        rate = row['Exchange_Rate'] # 당시 환율
+        
+        if ticker not in holdings:
+            holdings[ticker] = {'qty': 0, 'total_cost_krw': 0}
+
+        if row['Action'] == 'BUY':
+            # 매수: 평단가 갱신
+            cost_krw = (qty * price * rate) + (fee * rate) # 수수료 포함 매수비용
+            holdings[ticker]['qty'] += qty
+            holdings[ticker]['total_cost_krw'] += cost_krw
+
+        elif row['Action'] == 'SELL':
+            # 매도: 수익 실현
+            if holdings[ticker]['qty'] > 0:
+                # 1주당 평균 매수 단가 (KRW)
+                avg_buy_price_krw = holdings[ticker]['total_cost_krw'] / holdings[ticker]['qty']
+                
+                # 매도 시 수령액 (KRW) - 수수료 차감
+                sell_revenue_krw = (qty * price * rate) - (fee * rate)
+                
+                # 매수 원가 (KRW)
+                buy_cost_krw = avg_buy_price_krw * qty
+                
+                # 차익 (Profit)
+                profit = sell_revenue_krw - buy_cost_krw
+                
+                # 보유량 및 원가 차감
+                holdings[ticker]['qty'] -= qty
+                holdings[ticker]['total_cost_krw'] -= buy_cost_krw
+                
+                # 올해 거래인지 확인
+                if row['Date'].year == current_year:
+                    realized_profit_krw += profit
+                    tax_log.append(f"{row['Date'].strftime('%Y-%m-%d')} {ticker} 매도: {int(profit):,}원 (수익)")
+    
+    # 세금 계산 (기본공제 250만원)
+    taxable_income = max(0, realized_profit_krw - 2500000)
+    estimated_tax = taxable_income * 0.22 # 22% 양도소득세
+    remaining = max(0, 2500000 - realized_profit_krw)
+
     return {
-        'KRW': current_krw, 
-        'USD': current_usd,
-        'Detail_USD_In': usd_gained,
-        'Detail_USD_Out': usd_spent,
-        'Detail_USD_Earned': usd_earned,
-        'Stock_Log': stock_details
+        'realized_profit': realized_profit_krw,
+        'tax_estimated': estimated_tax,
+        'remaining_allowance': remaining,
+        'log': tax_log
     }
 
 def log_cash_flow(date, type_, krw, usd, rate):
@@ -137,7 +198,6 @@ def delete_data_by_date(target_date_str):
 
 def calculate_history(df_stock, df_cash):
     if df_stock.empty and df_cash.empty: return pd.DataFrame()
-    
     dates = []
     if not df_stock.empty and 'Date' in df_stock.columns: dates.append(pd.to_datetime(df_stock['Date']).min())
     if not df_cash.empty and 'Date' in df_cash.columns: dates.append(pd.to_datetime(df_cash['Date']).min())
@@ -157,7 +217,6 @@ def calculate_history(df_stock, df_cash):
     if not df_s.empty:
         df_s['Date'] = pd.to_datetime(df_s['Date'])
         for col in ['Qty', 'Price', 'Fee']: df_s[col] = pd.to_numeric(df_s[col], errors='coerce').fillna(0)
-            
     df_c = df_cash.copy()
     if not df_c.empty:
         df_c['Date'] = pd.to_datetime(df_c['Date'])
@@ -189,7 +248,6 @@ def calculate_history(df_stock, df_cash):
                     net_div = row['Price'] - row['Fee']
                     cum_cash_usd += net_div
 
-        # 🔥 GMMF 추가!
         history.append({
             "Date": d,
             "Total_Invested": cum_invested_krw,
@@ -200,13 +258,12 @@ def calculate_history(df_stock, df_cash):
             "Stock_SPYM": cum_stock_qty.get('SPYM',0),
             "Stock_GMMF": cum_stock_qty.get('GMMF',0)
         })
-        
     return pd.DataFrame(history)
 
 # ==========================================
 # 3. 로딩
 # ==========================================
-st.title("🛡️ Project Aegis V12.0 (Visual Master)")
+st.title("🛡️ Project Aegis V13.0 (Tax Guard)")
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
@@ -234,6 +291,8 @@ try:
 except: df_cash = pd.DataFrame()
 
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
+# 🔥 세금 데이터 계산
+tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
 
 # ==========================================
@@ -355,7 +414,8 @@ total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * k
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
-tab1, tab2, tab3 = st.tabs(["📊 자산 & 포트폴리오", "📈 추세 그래프", "📋 상세 기록"])
+# 🔥 [NEW] 탭 추가: 세금 탭
+tab1, tab2, tab3, tab4 = st.tabs(["📊 자산 & 포트폴리오", "👮‍♂️ 세금 & 절세 전략", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
     col1, col2, col3, col4 = st.columns(4)
@@ -365,13 +425,6 @@ with tab1:
     col4.metric("현재 환율", f"{krw_rate:,.0f}원")
     st.markdown("---")
 
-    with st.expander("🔍 잔고 계산 내역 상세 (오차 원인 찾기)"):
-        st.write(f"**1. 총 환전 입금 (+):** ${wallet_data['Detail_USD_In']:.2f}")
-        st.write(f"**2. 주식 매수 총액 (-):** ${wallet_data['Detail_USD_Out']:.2f}")
-        st.write(f"**3. 매도/배당 수익 (+):** ${wallet_data['Detail_USD_Earned']:.2f}")
-        st.write(f"**= 최종 달러 잔고:** ${wallet_data['USD']:.2f}")
-
-    # 🔥 [Visual Upgrade] 파이 차트 라벨 추가
     c_chart1, c_chart2 = st.columns(2)
     with c_chart1:
         st.subheader("🍩 자산 구성")
@@ -381,7 +434,6 @@ with tab1:
                 {"Type": "현금(KRW)", "Value": wallet_data['KRW']},
                 {"Type": "현금(USD)", "Value": wallet_data['USD'] * krw_rate}
             ])
-            # 비율 계산
             asset_df['Percent'] = (asset_df['Value'] / total_asset * 100).round(1).astype(str) + '%'
             
             base = alt.Chart(asset_df).encode(theta=alt.Theta("Value", stack=True))
@@ -394,7 +446,6 @@ with tab1:
                 color=alt.value("black")
             )
             st.altair_chart(pie + text, use_container_width=True)
-        else: st.info("자산이 없습니다.")
 
     with c_chart2:
         st.subheader("🥧 종목별 비중")
@@ -415,13 +466,45 @@ with tab1:
             st.altair_chart(pie2 + text2, use_container_width=True)
         else: st.info("보유 주식이 없습니다.")
 
+# 🔥 [NEW] 세금 탭 구현
 with tab2:
+    st.header("👮‍♂️ 2025년 세금 지킴이 (Tax Guard)")
+    st.caption("미국 주식은 연간 250만 원까지 비과세입니다. (초과분 22% 과세)")
+    
+    t1, t2, t3 = st.columns(3)
+    t1.metric("올해 실현 수익", f"{int(tax_info['realized_profit']):,}원")
+    t2.metric("남은 비과세 한도", f"{int(tax_info['remaining_allowance']):,}원", 
+              delta_color="normal" if tax_info['remaining_allowance'] > 0 else "inverse")
+    t3.metric("예상 세금 (22%)", f"{int(tax_info['tax_estimated']):,}원")
+    
+    st.markdown("---")
+    
+    # 상태바 (Progress Bar)
+    progress = min(1.0, max(0.0, tax_info['realized_profit'] / 2500000))
+    st.write(f"📊 **한도 소진율: {progress*100:.1f}%**")
+    st.progress(progress)
+    
+    if progress >= 1.0:
+        st.error("🚨 비과세 한도를 초과했습니다! 지금부터 파는 주식은 세금이 발생합니다.")
+    elif progress >= 0.8:
+        st.warning("⚠️ 한도가 얼마 안 남았습니다. 매도 시 주의하세요.")
+    else:
+        st.success("✅ 아직 여유가 있습니다. 수익 실현(익절) 기회를 노려보세요!")
+        
+    st.markdown("---")
+    st.subheader("📝 올해 매도 기록")
+    if tax_info['log']:
+        for log in tax_info['log']:
+            st.text(log)
+    else:
+        st.info("올해 매도한 내역이 없습니다.")
+
+with tab3:
     st.subheader("📈 자산 변화 추이")
     history_df = calculate_history(df_stock, df_cash)
     if not history_df.empty:
         chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고", "총 투자원금"], horizontal=True)
         if chart_opt == "보유 수량":
-            # 🔥 GMMF 포함해서 melt
             long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
             c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Qty', color='Ticker', tooltip=['Date', 'Ticker', 'Qty']).interactive()
             st.altair_chart(c, use_container_width=True)
@@ -434,7 +517,7 @@ with tab2:
             st.altair_chart(c, use_container_width=True)
     else: st.info("데이터가 부족합니다.")
 
-with tab3:
+with tab4:
     st.subheader("📝 주식 거래 내역")
     st.dataframe(df_stock, use_container_width=True)
     st.markdown("---")
