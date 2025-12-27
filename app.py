@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V15.1 (Real-Asset Check)", layout="wide")
+st.set_page_config(page_title="Project Aegis V16.0 (AI Auto-Pilot)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -26,7 +26,7 @@ def send_test_message():
         st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
-# 1. 데이터 엔진
+# 1. 데이터 엔진 & AI 분석
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
@@ -57,6 +57,30 @@ def get_vix_data():
         df = yf.Ticker("^VIX").history(period="2mo")
         return df['Close'].iloc[-1], df
     except: return 0, pd.DataFrame()
+
+# 🔥 [NEW] AI 오토파일럿 로직 (목표 비중 자동 산출)
+def get_ai_target_ratios(vix, q_rsi, s_rsi):
+    mode = "Normal"
+    # 기본값 (평상시)
+    t_qqqm = 35
+    t_spym = 35
+    t_sgov = 30
+    
+    # 1. 공포 장세 (매수 기회) - VIX 30 이상 or RSI 30 미만
+    if vix > 30 or q_rsi < 30 or s_rsi < 30:
+        mode = "Fear (Aggressive Buy)"
+        t_qqqm = 45 # 주식 비중 확대
+        t_spym = 45
+        t_sgov = 10 # 현금 축소
+        
+    # 2. 과열 장세 (현금 확보) - RSI 70 이상
+    elif q_rsi > 70 or s_rsi > 70:
+        mode = "Greed (Profit Take)"
+        t_qqqm = 25 # 주식 비중 축소
+        t_spym = 25
+        t_sgov = 50 # 현금 확대 (폭락 대비)
+        
+    return t_qqqm, t_spym, t_sgov, mode
 
 def calculate_wallet_balance_detail(df_stock, df_cash):
     krw_deposit = 0; krw_used = 0; usd_gained = 0
@@ -184,7 +208,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V15.1 (Real-Asset Check)")
+st.title("🛡️ Project Aegis V16.0 (AI Auto-Pilot)")
 
 # 데이터 로딩
 sheet_name = "Sheet1"
@@ -213,20 +237,43 @@ wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
 
-# 사이드바
+# 🔥 AI 분석 데이터 호출 (타겟 설정 전 미리 호출)
+vix_val, vix_hist = get_vix_data()
+q_price, q_rsi, q_hist = get_market_analysis("QQQM")
+s_price, s_rsi, s_hist = get_market_analysis("SPYM")
+
+# ==========================================
+# 4. 사이드바 (AI 오토파일럿 탑재)
+# ==========================================
 st.sidebar.header("🏦 자금 관리")
 c1, c2 = st.sidebar.columns(2)
 c1.metric("🇰🇷 원화", f"{int(wallet_data['KRW']):,}원")
 c2.metric("🇺🇸 달러", f"${wallet_data['USD']:.2f}")
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("🎯 목표 포트폴리오 설정"):
-    st.caption("목표 비중 합계는 100%가 권장됩니다.")
-    target_qqqm = st.slider("QQQM (성장)", 0, 100, 35, 5)
-    target_spym = st.slider("SPYM (안정)", 0, 100, 35, 5)
-    target_sgov = st.slider("SGOV (현금성)", 0, 100, 30, 5)
+with st.sidebar.expander("🎯 포트폴리오 목표 설정", expanded=True):
+    # 🔥 [NEW] 오토파일럿 스위치
+    use_autopilot = st.toggle("🧠 AI 오토파일럿 모드", value=True)
+    
+    if use_autopilot:
+        # AI가 계산한 비율 가져오기
+        ai_qqqm, ai_spym, ai_sgov, ai_mode = get_ai_target_ratios(vix_val, q_rsi, s_rsi)
+        
+        st.info(f"🤖 **AI 판단: {ai_mode}**")
+        st.caption("시장 상황에 따라 비중을 자동 최적화 중입니다.")
+        
+        # 슬라이더는 보여주되 비활성화 (AI 값 표시용)
+        target_qqqm = st.slider("QQQM (성장)", 0, 100, ai_qqqm, disabled=True)
+        target_spym = st.slider("SPYM (안정)", 0, 100, ai_spym, disabled=True)
+        target_sgov = st.slider("SGOV (현금성)", 0, 100, ai_sgov, disabled=True)
+    else:
+        st.caption("사용자가 직접 비중을 설정합니다.")
+        target_qqqm = st.slider("QQQM (성장)", 0, 100, 35, 5)
+        target_spym = st.slider("SPYM (안정)", 0, 100, 35, 5)
+        target_sgov = st.slider("SGOV (현금성)", 0, 100, 30, 5)
+
     total_target = target_qqqm + target_spym + target_sgov
-    if total_target != 100: st.error(f"합계: {total_target}% (100%가 아닙니다!)")
+    if total_target != 100: st.error(f"합계: {total_target}% (100% 맞춰주세요)")
     else: st.success("합계: 100% (완벽합니다)")
 
 st.sidebar.markdown("---")
@@ -301,7 +348,7 @@ elif mode == "🗑️ 데이터 관리":
 st.sidebar.markdown("---")
 if st.sidebar.button("🔔 텔레그램 테스트"): send_test_message()
 
-# 메인 대시보드
+# 메인 대시보드 계산
 current_holdings = {}
 total_stock_val_krw = 0
 asset_details = []
@@ -329,11 +376,12 @@ profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 자산 & 포트폴리오", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
+    # 🔥 [NEW] 총 평가 자산 표시 개선
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("총 자산", f"{int(total_asset):,}원")
-    col2.metric("총 투자원금", f"{int(total_deposit):,}원")
-    col3.metric("예상 수익", f"{int(net_profit):+,.0f}원", f"{profit_rate:.2f}%")
-    col4.metric("현재 환율", f"{krw_rate:,.0f}원")
+    col1.metric("💰 총 평가 자산", f"{int(total_asset):,}원", help="주식 평가액 + 현금 잔고(KRW+USD)")
+    col2.metric("💳 총 투자원금", f"{int(total_deposit):,}원")
+    col3.metric("📈 예상 수익", f"{int(net_profit):+,.0f}원", f"{profit_rate:.2f}%")
+    col4.metric("💵 현재 환율", f"{krw_rate:,.0f}원")
     st.markdown("---")
     
     with st.expander("🔍 잔고 계산 내역 상세"):
@@ -362,15 +410,19 @@ with tab1:
             text2 = base2.mark_text(radius=140).encode(text=alt.Text("Percent"), order=alt.Order("가치", sort="descending"), color=alt.value("black"))
             st.altair_chart(pie2 + text2, use_container_width=True)
 
-# 🔥 [NEW] AI 리밸런싱 탭 (지갑 잔고 연동)
 with tab2:
     st.header("⚖️ AI Portfolio Rebalancer")
-    st.caption("사이드바에서 설정한 '목표 비율'에 맞춰 리밸런싱을 제안합니다.")
+    if use_autopilot:
+        st.info(f"🧠 **AI 오토파일럿 작동 중: [{ai_mode}]** 모드에 맞춰 계산합니다.")
+    else:
+        st.caption("사이드바에서 설정한 '수동 목표 비율'에 맞춰 리밸런싱을 제안합니다.")
     
     if asset_details:
         rebal_df = pd.DataFrame(asset_details)
         total_val = rebal_df['가치'].sum()
         rebal_df['Current_%'] = (rebal_df['가치'] / total_val * 100)
+        
+        # 목표 비중 사용 (AI 또는 수동)
         targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0}
         rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
         rebal_df['Diff_%'] = rebal_df['Current_%'] - rebal_df['Target_%']
@@ -393,37 +445,32 @@ with tab2:
             with col_action:
                 if row['Action_Qty'] > 0.5:
                     cost_usd = row['Action_Value_USD']
-                    # 🔥 [CHECK] 달러 잔고 확인 로직 추가
                     if wallet_data['USD'] >= cost_usd:
                         st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(자금 충분 ✅)")
                     else:
                         shortage = cost_usd - wallet_data['USD']
-                        st.warning(f"🟠 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(⚠️ ${shortage:.2f} 부족! 환전 필요)")
-                        
+                        st.warning(f"🟠 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(⚠️ ${shortage:.2f} 부족)")
                 elif row['Action_Qty'] < -0.5:
                     st.error(f"🔴 **매도 추천**\n\n약 {abs(row['Action_Qty'])}주\n(${abs(row['Action_Value_USD']):.2f})")
                 else:
-                    st.info("⚪ **유지 (Good)**\n\n리밸런싱 불필요")
+                    st.info("⚪ **유지 (Good)**")
             st.markdown("---")
     else: st.info("보유 중인 주식이 없어 리밸런싱을 계산할 수 없습니다.")
 
 with tab3:
     st.header("📡 AI Market Radar")
     col_vix, col_qqqm, col_spym = st.columns(3)
-    vix_val, vix_hist = get_vix_data()
     vix_delta = vix_val - vix_hist['Close'].iloc[-2] if len(vix_hist) > 1 else 0
     with col_vix:
         st.metric("VIX (공포지수)", f"{vix_val:.2f}", f"{vix_delta:.2f}", delta_color="inverse")
         if vix_val > 30: st.error("😱 극도의 공포 (매수 기회!)")
         elif vix_val < 15: st.warning("😌 너무 평온함 (주의)")
         else: st.info("😐 보통 시장")
-    q_price, q_rsi, q_hist = get_market_analysis("QQQM")
     with col_qqqm:
         st.metric("QQQM RSI (14)", f"{q_rsi:.1f}")
         if q_rsi < 30: st.success("🟢 과매도 (Strong Buy)")
         elif q_rsi > 70: st.error("🔴 과매수 (Sell Warning)")
         else: st.info("⚪ 중립")
-    s_price, s_rsi, s_hist = get_market_analysis("SPYM")
     with col_spym:
         st.metric("SPYM RSI (14)", f"{s_rsi:.1f}")
         if s_rsi < 30: st.success("🟢 과매도 (Buy)")
