@@ -7,3 +7,4 @@ pandas
 beautifulsoup4
 requests
 st-gsheets-connection
+yfinance
