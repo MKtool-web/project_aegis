@@ -9,26 +9,36 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
 # ==========================================
-# 0. 기본 설정
+# 0. 기본 설정 & 보안 (Security)
 # ==========================================
 st.set_page_config(page_title="Project Aegis V18.0 (Final Complete)", layout="wide")
 
-# 🔒 [보안] 로그인 시스템
+# 🔒 로그인 시스템 (안전장치 포함)
 def check_password():
+    # 세션 상태 초기화
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
 
+    # 비밀번호 설정 여부 확인
+    if "APP_PASSWORD" not in st.secrets:
+        st.warning("⚠️ 'secrets.toml'에 'APP_PASSWORD'가 설정되지 않았습니다. 누구나 접속 가능합니다.")
+        return # 비밀번호 없으면 통과
+
+    # 인증되지 않은 경우 로그인 화면 표시
     if not st.session_state["authenticated"]:
+        st.title("🔒 Project Aegis")
         user_input = st.text_input("🔑 접속 암호를 입력하세요:", type="password")
         if st.button("로그인"):
             if user_input == st.secrets["APP_PASSWORD"]:
                 st.session_state["authenticated"] = True
-                st.rerun()
+                st.rerun() # 성공 시 새로고침
             else:
                 st.error("암호가 틀렸습니다.")
-        st.stop() # 암호가 맞을 때까지 여기서 멈춤
+        st.stop() # 암호 맞을 때까지 여기서 코드 실행 중단
 
 check_password() # 보안 검문소 실행
+
+# 구글 시트 연결
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -384,7 +394,7 @@ profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
-    # 🔥 [NEW] 메인 지표 4개 (주식 평가액 포함)
+    # 메인 지표 4개
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("💰 총 자산 (주식+현금)", f"{int(total_asset):,}원")
     col2.metric("📊 순수 주식 평가액", f"{int(total_stock_val_krw):,}원")
@@ -431,7 +441,6 @@ with tab2:
     
     st.markdown("---")
     
-    # 🔥 [NEW] 종목별 배당 정보 (User Guide)
     with st.expander("ℹ️ 내 종목 배당 주기 확인하기 (클릭)", expanded=True):
         st.markdown("""
         * **📅 월배당 (매달):** `SGOV`, `GMMF` (매월 초 입금)
