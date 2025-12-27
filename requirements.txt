@@ -2,9 +2,7 @@ streamlit
 pandas
 beautifulsoup4
 requests
-streamlit
-pandas
-beautifulsoup4
-requests
 st-gsheets-connection
 yfinance
+gspread
+oauth2client
