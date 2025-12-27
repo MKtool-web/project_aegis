@@ -94,7 +94,8 @@ st.title("🛡️ Project Aegis V2.5")
 
 # DB에서 데이터 읽어오기
 try:
-    data = conn.read(spreadsheet=SHEET_URL, usecols=[0, 1, 2, 3, 4])
+    # 👇 ttl=0 추가 (캐시 끄기)
+    data = conn.read(spreadsheet=SHEET_URL, usecols=[0, 1, 2, 3, 4], ttl=0)
     df = pd.DataFrame(data)
     if not df.empty:
         df = df.sort_values(by="Date", ascending=False)
