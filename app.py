@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V11.4 (Debug)", layout="wide")
+st.set_page_config(page_title="Project Aegis V12.0 (Visual Master)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -25,7 +25,7 @@ def send_test_message():
         st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
-# 1. 데이터 엔진 (정밀 계산)
+# 1. 데이터 엔진
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
@@ -41,15 +41,12 @@ def get_usd_krw():
         return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
     except: return 1450.0
 
-# 🔥 [핵심] 모든 데이터를 숫자로 강제 변환 후 계산 (오차 제거)
 def calculate_wallet_balance_detail(df_stock, df_cash):
-    # 1. 현금 흐름 계산
     krw_deposit = 0
     krw_used = 0
     usd_gained = 0
     
     if not df_cash.empty:
-        # 강제 형변환 (문자열 '1,000' 등 처리)
         for col in ['Amount_KRW', 'Amount_USD']:
             if col in df_cash.columns:
                 df_cash[col] = pd.to_numeric(df_cash[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
@@ -58,32 +55,27 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
         krw_used = df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
         usd_gained = df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
 
-    # 2. 주식 거래 계산
     usd_spent = 0
     usd_earned = 0
     stock_details = []
 
     if not df_stock.empty:
-        # 강제 형변환
         for col in ['Qty', 'Price', 'Fee']:
             if col in df_stock.columns:
                 df_stock[col] = pd.to_numeric(df_stock[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
 
-        # 매수 (비용 발생)
         buys = df_stock[df_stock['Action'] == 'BUY']
         for _, row in buys.iterrows():
             cost = (row['Qty'] * row['Price']) + row['Fee']
             usd_spent += cost
-            stock_details.append(f"[-] 매수 {row['Ticker']}: ${cost:.2f} (단가 {row['Price']} x {row['Qty']} + 수수료 {row['Fee']})")
+            stock_details.append(f"[-] 매수 {row['Ticker']}: ${cost:.2f}")
 
-        # 매도 (수익 발생)
         sells = df_stock[df_stock['Action'] == 'SELL']
         for _, row in sells.iterrows():
             revenue = (row['Qty'] * row['Price']) - row['Fee']
             usd_earned += revenue
             stock_details.append(f"[+] 매도 {row['Ticker']}: ${revenue:.2f}")
             
-        # 배당 (수익 발생)
         divs = df_stock[df_stock['Action'] == 'DIVIDEND']
         for _, row in divs.iterrows():
             revenue = row['Price'] - row['Fee']
@@ -105,8 +97,7 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
 def log_cash_flow(date, type_, krw, usd, rate):
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0)
-        if 'Type' not in df.columns:
-             df = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
+        if 'Type' not in df.columns: df = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
         date_str = date.strftime("%Y-%m-%d")
         new_row = pd.DataFrame([{"Date": date_str, "Type": type_, "Amount_KRW": krw, "Amount_USD": usd, "Ex_Rate": rate}])
         conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=pd.concat([df, new_row], ignore_index=True))
@@ -162,7 +153,6 @@ def calculate_history(df_stock, df_cash):
     cum_invested_krw = 0 
     cum_stock_qty = {'SGOV':0, 'SPYM':0, 'QQQM':0, 'GMMF':0}
     
-    # 데이터 정리
     df_s = df_stock.copy()
     if not df_s.empty:
         df_s['Date'] = pd.to_datetime(df_s['Date'])
@@ -199,6 +189,7 @@ def calculate_history(df_stock, df_cash):
                     net_div = row['Price'] - row['Fee']
                     cum_cash_usd += net_div
 
+        # 🔥 GMMF 추가!
         history.append({
             "Date": d,
             "Total_Invested": cum_invested_krw,
@@ -206,15 +197,16 @@ def calculate_history(df_stock, df_cash):
             "Cash_USD": cum_cash_usd,
             "Stock_SGOV": cum_stock_qty.get('SGOV',0),
             "Stock_QQQM": cum_stock_qty.get('QQQM',0),
-            "Stock_SPYM": cum_stock_qty.get('SPYM',0)
+            "Stock_SPYM": cum_stock_qty.get('SPYM',0),
+            "Stock_GMMF": cum_stock_qty.get('GMMF',0)
         })
         
     return pd.DataFrame(history)
 
 # ==========================================
-# 3. 로딩 및 자동 복구
+# 3. 로딩
 # ==========================================
-st.title("🛡️ Project Aegis V11.4 (Detail Debug)")
+st.title("🛡️ Project Aegis V12.0 (Visual Master)")
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
@@ -241,7 +233,6 @@ try:
         df_cash['Date'] = pd.to_datetime(df_cash['Date']).dt.strftime("%Y-%m-%d")
 except: df_cash = pd.DataFrame()
 
-# 정밀 계산 실행
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 krw_rate = get_usd_krw()
 
@@ -297,7 +288,6 @@ elif mode == "주식 거래":
         cur_p = 0.0
         if action != "DIVIDEND": cur_p = get_current_price(ticker)
         price = st.number_input(price_label, value=cur_p if cur_p>0 else 0.0, format="%.2f")
-        
         fee = st.number_input("수수료 ($)", value=0.0, format="%.2f")
         rate = st.number_input("환율", value=krw_rate, format="%.2f")
 
@@ -345,7 +335,6 @@ total_stock_val_krw = 0
 asset_details = []
 
 if not df_stock.empty and 'Action' in df_stock.columns:
-    # 문자열 숫자로 변환 (안전장치)
     df_stock['Qty'] = pd.to_numeric(df_stock['Qty'], errors='coerce').fillna(0)
     current_holdings = df_stock.groupby("Ticker").apply(lambda x: x.loc[x['Action']=='BUY','Qty'].sum() - x.loc[x['Action']=='SELL','Qty'].sum()).to_dict()
     
@@ -376,17 +365,13 @@ with tab1:
     col4.metric("현재 환율", f"{krw_rate:,.0f}원")
     st.markdown("---")
 
-    # 🔥 [DEBUG] 잔고 상세 내역 (오차 원인 찾기)
     with st.expander("🔍 잔고 계산 내역 상세 (오차 원인 찾기)"):
         st.write(f"**1. 총 환전 입금 (+):** ${wallet_data['Detail_USD_In']:.2f}")
         st.write(f"**2. 주식 매수 총액 (-):** ${wallet_data['Detail_USD_Out']:.2f}")
         st.write(f"**3. 매도/배당 수익 (+):** ${wallet_data['Detail_USD_Earned']:.2f}")
         st.write(f"**= 최종 달러 잔고:** ${wallet_data['USD']:.2f}")
-        st.markdown("---")
-        st.write("**📝 세부 지출 로그:**")
-        for log in wallet_data['Stock_Log']:
-            st.caption(log)
 
+    # 🔥 [Visual Upgrade] 파이 차트 라벨 추가
     c_chart1, c_chart2 = st.columns(2)
     with c_chart1:
         st.subheader("🍩 자산 구성")
@@ -396,20 +381,39 @@ with tab1:
                 {"Type": "현금(KRW)", "Value": wallet_data['KRW']},
                 {"Type": "현금(USD)", "Value": wallet_data['USD'] * krw_rate}
             ])
+            # 비율 계산
+            asset_df['Percent'] = (asset_df['Value'] / total_asset * 100).round(1).astype(str) + '%'
+            
             base = alt.Chart(asset_df).encode(theta=alt.Theta("Value", stack=True))
             pie = base.mark_arc(outerRadius=120, innerRadius=60).encode(
-                color=alt.Color("Type"), order=alt.Order("Value", sort="descending"), tooltip=["Type", "Value"]
+                color=alt.Color("Type"), order=alt.Order("Value", sort="descending"), tooltip=["Type", "Value", "Percent"]
             )
-            text = base.mark_text(radius=140).encode(text=alt.Text("Value", format=",.0f"), order=alt.Order("Value", sort="descending"), color=alt.value("black"))
+            text = base.mark_text(radius=140).encode(
+                text=alt.Text("Percent"), 
+                order=alt.Order("Value", sort="descending"), 
+                color=alt.value("black")
+            )
             st.altair_chart(pie + text, use_container_width=True)
+        else: st.info("자산이 없습니다.")
 
     with c_chart2:
         st.subheader("🥧 종목별 비중")
         if asset_details:
             stock_df = pd.DataFrame(asset_details)
+            total_stock_val = stock_df['가치'].sum()
+            stock_df['Percent'] = (stock_df['가치'] / total_stock_val * 100).round(1).astype(str) + '%'
+
             base2 = alt.Chart(stock_df).encode(theta=alt.Theta("가치", stack=True))
-            pie2 = base2.mark_arc(outerRadius=120).encode(color=alt.Color("종목"), tooltip=["종목", "가치", "수량"])
-            st.altair_chart(pie2, use_container_width=True)
+            pie2 = base2.mark_arc(outerRadius=120).encode(
+                color=alt.Color("종목"), tooltip=["종목", "가치", "수량", "Percent"]
+            )
+            text2 = base2.mark_text(radius=140).encode(
+                text=alt.Text("Percent"), 
+                order=alt.Order("가치", sort="descending"), 
+                color=alt.value("black")
+            )
+            st.altair_chart(pie2 + text2, use_container_width=True)
+        else: st.info("보유 주식이 없습니다.")
 
 with tab2:
     st.subheader("📈 자산 변화 추이")
@@ -417,7 +421,8 @@ with tab2:
     if not history_df.empty:
         chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고", "총 투자원금"], horizontal=True)
         if chart_opt == "보유 수량":
-            long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM'], var_name='Ticker', value_name='Qty')
+            # 🔥 GMMF 포함해서 melt
+            long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
             c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Qty', color='Ticker', tooltip=['Date', 'Ticker', 'Qty']).interactive()
             st.altair_chart(c, use_container_width=True)
         elif chart_opt == "현금 잔고":
