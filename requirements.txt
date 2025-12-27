@@ -6,3 +6,4 @@ st-gsheets-connection
 yfinance
 gspread
 oauth2client
+ta
