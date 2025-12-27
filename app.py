@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V17.0 (Final Snowball)", layout="wide")
+st.set_page_config(page_title="Project Aegis V18.0 (Final Complete)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -126,24 +126,15 @@ def calculate_tax_guard(df_stock):
     return {'realized_profit': realized_profit_krw, 'tax_estimated': max(0, realized_profit_krw - 2500000) * 0.22, 
             'remaining_allowance': max(0, 2500000 - realized_profit_krw), 'log': tax_log}
 
-# 🔥 [NEW] 배당금 분석 엔진
 def calculate_dividend_analytics(df_stock):
     if df_stock.empty: return pd.DataFrame(), 0.0
-    
-    # 배당 내역 필터링
     df_div = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
     if df_div.empty: return pd.DataFrame(), 0.0
-    
-    # 실수령 배당금 계산 (Price - Fee)
     df_div['Net_Dividend'] = df_div['Price'] - df_div['Fee']
-    
-    # 월별 집계
     df_div['Date'] = pd.to_datetime(df_div['Date'])
     df_div['Month'] = df_div['Date'].dt.strftime('%Y-%m')
-    
     monthly_div = df_div.groupby('Month')['Net_Dividend'].sum().reset_index()
     total_div = df_div['Net_Dividend'].sum()
-    
     return monthly_div, total_div
 
 def log_cash_flow(date, type_, krw, usd, rate):
@@ -218,7 +209,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V17.0 (Final Snowball)")
+st.title("🛡️ Project Aegis V18.0 (Final Complete)")
 
 # 데이터 로딩
 sheet_name = "Sheet1"
@@ -246,11 +237,9 @@ except: df_cash = pd.DataFrame()
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
-
-# 🔥 배당 데이터 분석 호출
 monthly_div, total_div_all = calculate_dividend_analytics(df_stock)
 
-# AI 분석 데이터 호출
+# AI 분석 데이터
 vix_val, vix_hist = get_vix_data()
 q_price, q_rsi, q_hist = get_market_analysis("QQQM")
 s_price, s_rsi, s_hist = get_market_analysis("SPYM")
@@ -374,15 +363,17 @@ total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * k
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
-# 탭 구성 (7개: 배당 탭 추가)
+# 탭 구성
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
+    # 🔥 [NEW] 메인 지표 4개 (주식 평가액 포함)
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💰 총 평가 자산", f"{int(total_asset):,}원", help="주식 평가액 + 현금 잔고(KRW+USD)")
-    col2.metric("💳 총 투자원금", f"{int(total_deposit):,}원")
+    col1.metric("💰 총 자산 (주식+현금)", f"{int(total_asset):,}원")
+    col2.metric("📊 순수 주식 평가액", f"{int(total_stock_val_krw):,}원")
     col3.metric("📈 예상 수익", f"{int(net_profit):+,.0f}원", f"{profit_rate:.2f}%")
-    col4.metric("💵 현재 환율", f"{krw_rate:,.0f}원")
+    col4.metric("💳 총 투자원금", f"{int(total_deposit):,}원")
+    
     st.markdown("---")
     
     with st.expander("🔍 잔고 계산 내역 상세"):
@@ -411,49 +402,39 @@ with tab1:
             text2 = base2.mark_text(radius=140).encode(text=alt.Text("Percent"), order=alt.Order("가치", sort="descending"), color=alt.value("black"))
             st.altair_chart(pie2 + text2, use_container_width=True)
 
-# 🔥 [NEW] 배당 & 스노우볼 탭
 with tab2:
     st.header("💰 Dividend Snowball Effect")
-    st.caption("지금까지 받은 배당금을 분석하고, 복리 투자의 힘을 시각화합니다.")
+    st.caption("배당금 재투자(Snowball)를 통해 복리 효과를 누리세요.")
     
     d1, d2, d3 = st.columns(3)
-    d1.metric("총 수령 배당금", f"${total_div_all:.2f}", help="세금 제외 실수령액")
-    
-    # SGOV 재투자 계산
+    d1.metric("총 수령 배당금", f"${total_div_all:.2f}")
     drip_shares = total_div_all / gov_price if gov_price > 0 else 0
-    d2.metric("SGOV 환산 (재투자)", f"{drip_shares:.2f}주", help=f"받은 배당금으로 SGOV를 {drip_shares:.2f}주 공짜로 살 수 있습니다!")
+    d2.metric("SGOV 환산 (재투자)", f"{drip_shares:.2f}주", help="받은 배당금으로 살 수 있는 SGOV 주식 수")
     d3.metric("현재 SGOV 가격", f"${gov_price:.2f}")
     
     st.markdown("---")
     
-    # 재투자 제안 카드
-    if total_div_all > 10:
-        st.success(f"🎉 **축하합니다!** 배당금이 **${total_div_all:.2f}** 모였습니다.\n\n"
-                   f"이 돈을 재투자하면 SGOV(파킹통장) **{int(drip_shares)}주**를 추가 매수할 수 있습니다. "
-                   "놀고 있는 배당금을 굴려 복리의 마법을 시작하세요!")
-    else:
-        st.info("🌱 아직 배당금 새싹이 자라는 중입니다. 꾸준히 모아가세요!")
+    # 🔥 [NEW] 종목별 배당 정보 (User Guide)
+    with st.expander("ℹ️ 내 종목 배당 주기 확인하기 (클릭)", expanded=True):
+        st.markdown("""
+        * **📅 월배당 (매달):** `SGOV`, `GMMF` (매월 초 입금)
+        * **🍂 분기배당 (3,6,9,12월):** `QQQM`, `SPYM` (분기 말 입금)
+        """)
 
     col_chart, col_log = st.columns([2, 1])
     with col_chart:
         st.subheader("📊 월별 배당금 추이")
         if not monthly_div.empty:
-            bar = alt.Chart(monthly_div).mark_bar().encode(
-                x=alt.X('Month', title='월 (Year-Month)'),
-                y=alt.Y('Net_Dividend', title='배당금 ($)'),
-                tooltip=['Month', 'Net_Dividend']
-            )
+            bar = alt.Chart(monthly_div).mark_bar().encode(x=alt.X('Month', title='월'), y=alt.Y('Net_Dividend', title='배당금 ($)'), tooltip=['Month', 'Net_Dividend'])
             st.altair_chart(bar, use_container_width=True)
-        else:
-            st.info("아직 배당금 수령 기록이 없습니다.")
+        else: st.info("배당 기록 없음")
             
     with col_log:
         st.subheader("📝 최근 배당 기록")
         div_logs = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
         if not div_logs.empty:
-            st.dataframe(div_logs[['Date', 'Ticker', 'Price', 'Fee']].rename(columns={'Price': '세전', 'Fee': '세금'}), hide_index=True)
-        else:
-            st.caption("기록 없음")
+            st.dataframe(div_logs[['Date', 'Ticker', 'Price']].rename(columns={'Price': '세전($)'}), hide_index=True)
+        else: st.caption("기록 없음")
 
 with tab3:
     st.header("⚖️ AI Portfolio Rebalancer")
@@ -478,7 +459,7 @@ with tab3:
             c_i, c_a = st.columns([2, 1])
             with c_i:
                 st.subheader(f"{row['종목']}")
-                st.write(f"**현재 {row['Current_%']:.1f}%** vs **목표 {row['Target_%']:.1f}%** (차이: {row['Diff_%']:+.1f}%)")
+                st.write(f"**현재 {row['Current_%']:.1f}%** vs **목표 {row['Target_%']:.1f}%**")
                 st.progress(min(1.0, max(0.0, row['Current_%']/100)))
             with c_a:
                 if row['Action_Qty'] > 0.5:
@@ -496,16 +477,16 @@ with tab4:
     vix_delta = vix_val - vix_hist['Close'].iloc[-2] if len(vix_hist) > 1 else 0
     with col_vix:
         st.metric("VIX (공포지수)", f"{vix_val:.2f}", f"{vix_delta:.2f}", delta_color="inverse")
-        if vix_val > 30: st.error("😱 극도의 공포 (매수 기회!)")
-        elif vix_val < 15: st.warning("😌 너무 평온함 (주의)")
-        else: st.info("😐 보통 시장")
+        if vix_val > 30: st.error("😱 공포 (매수 기회)")
+        elif vix_val < 15: st.warning("😌 탐욕 (주의)")
+        else: st.info("😐 보통")
     with col_qqqm:
-        st.metric("QQQM RSI (14)", f"{q_rsi:.1f}"); 
+        st.metric("QQQM RSI", f"{q_rsi:.1f}")
         if q_rsi < 30: st.success("🟢 과매도")
         elif q_rsi > 70: st.error("🔴 과매수")
         else: st.info("⚪ 중립")
     with col_spym:
-        st.metric("SPYM RSI (14)", f"{s_rsi:.1f}")
+        st.metric("SPYM RSI", f"{s_rsi:.1f}")
         if s_rsi < 30: st.success("🟢 과매도")
         elif s_rsi > 70: st.error("🔴 과매수")
         else: st.info("⚪ 중립")
