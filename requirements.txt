@@ -2,3 +2,8 @@ streamlit
 pandas
 beautifulsoup4
 requests
+streamlit
+pandas
+beautifulsoup4
+requests
+st-gsheets-connection
