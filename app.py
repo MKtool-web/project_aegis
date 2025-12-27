@@ -4,14 +4,14 @@ import yfinance as yf
 import time
 import requests
 import altair as alt 
-import ta # 기술적 분석 라이브러리 (requirements.txt에 ta 추가 필수)
+import ta
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V14.0 (AI Radar)", layout="wide")
+st.set_page_config(page_title="Project Aegis V15.0 (Rebalancer)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -42,20 +42,13 @@ def get_usd_krw():
         return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
     except: return 1450.0
 
-# 🔥 [NEW] 기술적 분석 데이터 (RSI, VIX)
 @st.cache_data(ttl=300)
 def get_market_analysis(ticker):
     try:
-        # RSI 계산을 위해 2달치 데이터 호출
         df = yf.Ticker(ticker).history(period="2mo")
         if len(df) < 14: return 0, 0, pd.DataFrame()
-        
-        # RSI 계산 (window=14)
         df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-        current_rsi = df['RSI'].iloc[-1]
-        current_price = df['Close'].iloc[-1]
-        
-        return current_price, current_rsi, df
+        return df['Close'].iloc[-1], df['RSI'].iloc[-1], df
     except: return 0, 0, pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -65,7 +58,6 @@ def get_vix_data():
         return df['Close'].iloc[-1], df
     except: return 0, pd.DataFrame()
 
-# 지갑 잔고 계산 (V13 유지)
 def calculate_wallet_balance_detail(df_stock, df_cash):
     krw_deposit = 0; krw_used = 0; usd_gained = 0
     if not df_cash.empty:
@@ -98,12 +90,10 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     return {'KRW': krw_deposit - krw_used, 'USD': usd_gained - usd_spent + usd_earned, 
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Detail_USD_Earned': usd_earned, 'Stock_Log': stock_details}
 
-# 세금 계산 (V13 유지)
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
     df = df_stock.copy(); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
     holdings = {}; current_year = datetime.now().year; realized_profit_krw = 0; tax_log = []
-
     for _, row in df.iterrows():
         ticker = row['Ticker']; qty = row['Qty']; price = row['Price']; fee = row['Fee']; rate = row['Exchange_Rate']
         if ticker not in holdings: holdings[ticker] = {'qty': 0, 'total_cost_krw': 0}
@@ -119,7 +109,6 @@ def calculate_tax_guard(df_stock):
                 holdings[ticker]['qty'] -= qty; holdings[ticker]['total_cost_krw'] -= buy_cost_krw
                 if row['Date'].year == current_year:
                     realized_profit_krw += profit; tax_log.append(f"{row['Date'].strftime('%Y-%m-%d')} {ticker} 매도: {int(profit):,}원 (수익)")
-    
     return {'realized_profit': realized_profit_krw, 'tax_estimated': max(0, realized_profit_krw - 2500000) * 0.22, 
             'remaining_allowance': max(0, 2500000 - realized_profit_krw), 'log': tax_log}
 
@@ -150,13 +139,11 @@ def delete_data_by_date(target_date_str):
         except: sheet_name = "시트1"
         df_s = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
         if not df_s.empty and 'Date' in df_s.columns:
-            df_s['Date'] = df_s['Date'].astype(str)
-            df_s = df_s[df_s['Date'] != target_date_str]
+            df_s['Date'] = df_s['Date'].astype(str); df_s = df_s[df_s['Date'] != target_date_str]
             conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=df_s)
         df_c = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0)
         if not df_c.empty and 'Date' in df_c.columns:
-            df_c['Date'] = df_c['Date'].astype(str)
-            df_c = df_c[df_c['Date'] != target_date_str]
+            df_c['Date'] = df_c['Date'].astype(str); df_c = df_c[df_c['Date'] != target_date_str]
             conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=df_c)
         return True
     except: return False
@@ -167,10 +154,8 @@ def calculate_history(df_stock, df_cash):
     if not df_stock.empty and 'Date' in df_stock.columns: dates.append(pd.to_datetime(df_stock['Date']).min())
     if not df_cash.empty and 'Date' in df_cash.columns: dates.append(pd.to_datetime(df_cash['Date']).min())
     if not dates: return pd.DataFrame()
-    
     start_date = min(dates); end_date = datetime.today(); date_range = pd.date_range(start=start_date, end=end_date)
     history = []; cum_cash_krw = 0; cum_cash_usd = 0; cum_invested_krw = 0; cum_stock_qty = {'SGOV':0, 'SPYM':0, 'QQQM':0, 'GMMF':0}
-    
     df_s = df_stock.copy()
     if not df_s.empty:
         df_s['Date'] = pd.to_datetime(df_s['Date'])
@@ -179,7 +164,6 @@ def calculate_history(df_stock, df_cash):
     if not df_c.empty:
         df_c['Date'] = pd.to_datetime(df_c['Date'])
         for col in ['Amount_KRW', 'Amount_USD']: df_c[col] = pd.to_numeric(df_c[col], errors='coerce').fillna(0)
-
     for d in date_range:
         if not df_c.empty:
             day_cash = df_c[df_c['Date'] == d]
@@ -200,7 +184,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V14.0 (AI Radar)")
+st.title("🛡️ Project Aegis V15.0 (Rebalancer)")
 
 # 데이터 로딩
 sheet_name = "Sheet1"
@@ -229,12 +213,29 @@ wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
 
-# 사이드바
+# ==========================================
+# 4. 사이드바 (리밸런싱 설정 추가)
+# ==========================================
 st.sidebar.header("🏦 자금 관리")
 c1, c2 = st.sidebar.columns(2)
 c1.metric("🇰🇷 원화", f"{int(wallet_data['KRW']):,}원")
 c2.metric("🇺🇸 달러", f"${wallet_data['USD']:.2f}")
 
+# 🔥 [NEW] 리밸런싱 목표 설정 (비중 조절)
+st.sidebar.markdown("---")
+with st.sidebar.expander("🎯 목표 포트폴리오 설정"):
+    st.caption("목표 비중 합계는 100%가 권장됩니다.")
+    target_qqqm = st.slider("QQQM (성장)", 0, 100, 35, 5)
+    target_spym = st.slider("SPYM (안정)", 0, 100, 35, 5)
+    target_sgov = st.slider("SGOV (현금성)", 0, 100, 30, 5)
+    
+    total_target = target_qqqm + target_spym + target_sgov
+    if total_target != 100:
+        st.error(f"합계: {total_target}% (100%가 아닙니다!)")
+    else:
+        st.success("합계: 100% (완벽합니다)")
+
+st.sidebar.markdown("---")
 mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "🗑️ 데이터 관리"], horizontal=True)
 
 if mode == "입금/환전":
@@ -330,8 +331,8 @@ total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * k
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
-# 탭 구성 (5개)
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 자산 & 포트폴리오", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
+# 🔥 [NEW] 탭 구성: 6개로 확장 (리밸런싱 추가)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 자산 & 포트폴리오", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
     col1, col2, col3, col4 = st.columns(4)
@@ -367,14 +368,59 @@ with tab1:
             text2 = base2.mark_text(radius=140).encode(text=alt.Text("Percent"), order=alt.Order("가치", sort="descending"), color=alt.value("black"))
             st.altair_chart(pie2 + text2, use_container_width=True)
 
-# 🔥 [NEW] AI 시장 레이더 (RSI, VIX)
+# 🔥 [NEW] AI 리밸런싱 탭
 with tab2:
+    st.header("⚖️ AI Portfolio Rebalancer")
+    st.caption("사이드바에서 설정한 '목표 비율'에 맞춰 리밸런싱을 제안합니다.")
+    
+    if asset_details:
+        rebal_df = pd.DataFrame(asset_details)
+        # 현재 비중 계산
+        total_val = rebal_df['가치'].sum()
+        rebal_df['Current_%'] = (rebal_df['가치'] / total_val * 100)
+        
+        # 목표 비중 매핑
+        targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0} # GMMF는 일단 0으로 둠
+        rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
+        
+        # 차이 계산
+        rebal_df['Diff_%'] = rebal_df['Current_%'] - rebal_df['Target_%']
+        
+        # 조정 필요 금액 및 수량 계산
+        rebal_df['Action_Value'] = total_val * (rebal_df['Target_%'] - rebal_df['Current_%']) / 100
+        rebal_df['Action_Value_USD'] = rebal_df['Action_Value'] / krw_rate
+        
+        # 현재가 가져오기 (실시간 계산)
+        current_prices = {t: get_current_price(t) for t in rebal_df['종목']}
+        rebal_df['Price_USD'] = rebal_df['종목'].map(current_prices)
+        
+        rebal_df['Action_Qty'] = (rebal_df['Action_Value_USD'] / rebal_df['Price_USD']).round(1)
+        
+        # 결과 출력
+        for _, row in rebal_df.iterrows():
+            if row['Target_%'] == 0: continue # 목표 없는 종목 패스
+            
+            col_info, col_action = st.columns([2, 1])
+            with col_info:
+                st.subheader(f"{row['종목']}")
+                st.write(f"**현재 {row['Current_%']:.1f}%** vs **목표 {row['Target_%']:.1f}%** (차이: {row['Diff_%']:+.1f}%)")
+                st.progress(min(1.0, max(0.0, row['Current_%']/100)))
+            
+            with col_action:
+                if row['Action_Qty'] > 0.5:
+                    st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${row['Action_Value_USD']:.2f})")
+                elif row['Action_Qty'] < -0.5:
+                    st.error(f"🔴 **매도 추천**\n\n약 {abs(row['Action_Qty'])}주\n(${abs(row['Action_Value_USD']):.2f})")
+                else:
+                    st.info("⚪ **유지 (Good)**\n\n리밸런싱 불필요")
+            st.markdown("---")
+            
+    else:
+        st.info("보유 중인 주식이 없어 리밸런싱을 계산할 수 없습니다.")
+
+with tab3:
     st.header("📡 AI Market Radar")
-    st.caption("RSI(과열/침체)와 VIX(공포지수)를 실시간으로 분석합니다.")
-    
     col_vix, col_qqqm, col_spym = st.columns(3)
-    
-    # VIX
     vix_val, vix_hist = get_vix_data()
     vix_delta = vix_val - vix_hist['Close'].iloc[-2] if len(vix_hist) > 1 else 0
     with col_vix:
@@ -383,7 +429,6 @@ with tab2:
         elif vix_val < 15: st.warning("😌 너무 평온함 (주의)")
         else: st.info("😐 보통 시장")
     
-    # QQQM RSI
     q_price, q_rsi, q_hist = get_market_analysis("QQQM")
     with col_qqqm:
         st.metric("QQQM RSI (14)", f"{q_rsi:.1f}")
@@ -391,22 +436,19 @@ with tab2:
         elif q_rsi > 70: st.error("🔴 과매수 (Sell Warning)")
         else: st.info("⚪ 중립")
 
-    # SPYM RSI
     s_price, s_rsi, s_hist = get_market_analysis("SPYM")
     with col_spym:
         st.metric("SPYM RSI (14)", f"{s_rsi:.1f}")
         if s_rsi < 30: st.success("🟢 과매도 (Buy)")
         elif s_rsi > 70: st.error("🔴 과매수 (Sell)")
         else: st.info("⚪ 중립")
-
-    st.markdown("---")
-    st.subheader("📉 RSI 추세 (최근 2달)")
+    
     if not q_hist.empty:
         q_hist = q_hist.reset_index()
         chart = alt.Chart(q_hist).mark_line().encode(x='Date', y='RSI', tooltip=['Date', 'RSI']).properties(height=300)
         st.altair_chart(chart, use_container_width=True)
 
-with tab3:
+with tab4:
     st.header("👮‍♂️ 2025년 세금 지킴이 (Tax Guard)")
     t1, t2, t3 = st.columns(3)
     t1.metric("올해 실현 수익", f"{int(tax_info['realized_profit']):,}원")
@@ -419,7 +461,7 @@ with tab3:
         for log in tax_info['log']: st.text(log)
     else: st.info("올해 매도 내역 없음")
 
-with tab4:
+with tab5:
     st.subheader("📈 자산 변화 추이")
     history_df = calculate_history(df_stock, df_cash)
     if not history_df.empty:
@@ -437,6 +479,6 @@ with tab4:
             st.altair_chart(c, use_container_width=True)
     else: st.info("데이터 부족")
 
-with tab5:
+with tab6:
     st.dataframe(df_stock, use_container_width=True)
     st.dataframe(df_cash, use_container_width=True)
