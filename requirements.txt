@@ -7,3 +7,4 @@ yfinance
 gspread
 oauth2client
 ta
+pytz
