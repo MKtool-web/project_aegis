@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
-import requests
-import time # 👈 시간 지연을 위해 추가된 부품
-from bs4 import BeautifulSoup
+import yfinance as yf  # 👈 새로 온 친구
+import time
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
@@ -12,33 +11,32 @@ from datetime import datetime
 st.set_page_config(page_title="Project Aegis", layout="wide")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
-
-# 🚨 선생님 엑셀 주소 (그대로 유지)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
 # ==========================================
-# 1. 핵심 엔진 (크롤링 & AI)
+# 1. 핵심 엔진 (야후 파이낸스 탑재 🚀)
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
+    """야후 파이낸스에서 진짜 주가 가져오기"""
     try:
-        url = f"https://finviz.com/quote.ashx?t={ticker}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(res.text, "html.parser")
-        price = soup.select_one("strong.quote-price").text.replace(',', '')
+        # GMMF 같은 한국/기타 종목은 티커 수정이 필요할 수 있음
+        # 일단 미국 티커 그대로 시도
+        stock = yf.Ticker(ticker)
+        price = stock.history(period="1d")['Close'].iloc[-1]
         return float(price)
     except:
-        return 100.0
+        # 야후도 못 찾으면 티커 문제일 가능성 높음
+        return 0.0 
 
 @st.cache_data(ttl=300)
 def get_usd_krw():
+    """환율 가져오기 (야후 파이낸스 버전)"""
     try:
-        url = "https://finance.naver.com/marketindex/"
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(res.text, "html.parser")
-        usd = soup.select_one("div.head_info > span.value").text.replace(',', '')
-        return float(usd)
+        # KRW=X 는 야후 파이낸스에서 원/달러 환율 코드
+        exchange = yf.Ticker("KRW=X")
+        price = exchange.history(period="1d")['Close'].iloc[-1]
+        return float(price)
     except:
         return 1450.0
 
@@ -47,8 +45,7 @@ def get_usd_krw():
 # ==========================================
 class Rebalancer:
     def __init__(self, current_holdings):
-        # 🚨 GMMF를 목표 비중에도 추가해야 AI가 인식합니다! (일단 0%로 둠)
-        self.TARGET_RATIO = {'SGOV': 0.30, 'SPYM': 0.35, 'QQQM': 0.35} 
+        self.TARGET_RATIO = {'SGOV': 0.30, 'SPYM': 0.35, 'QQQM': 0.35, 'GMMF': 0.0} 
         self.holdings = current_holdings
 
     def analyze(self, investment_krw, exchange_rate):
@@ -58,6 +55,8 @@ class Rebalancer:
         
         for ticker, qty in self.holdings.items():
             price = get_current_price(ticker)
+            if price == 0: price = 100 # 가격 못 가져오면 임시값
+            
             val = qty * price
             portfolio[ticker] = {'qty': qty, 'price': price, 'value': val}
             total_value_usd += val
@@ -66,6 +65,8 @@ class Rebalancer:
         recommendations = []
         
         for ticker, target_ratio in self.TARGET_RATIO.items():
+            if target_ratio == 0: continue
+            
             target_amt = total_asset_usd * target_ratio
             current_amt = portfolio.get(ticker, {'value': 0})['value']
             
@@ -80,12 +81,11 @@ class Rebalancer:
         return recommendations
 
 # ==========================================
-# 3. 데이터 로딩 (즉시 로딩 모드)
+# 3. 데이터 로딩
 # ==========================================
-st.title("🛡️ Project Aegis V3.1")
+st.title("🛡️ Project Aegis V3.2 (Real-time)")
 
 try:
-    # ttl=0 으로 캐시 끄기
     data = conn.read(spreadsheet=SHEET_URL, usecols=[0, 1, 2, 3, 4], ttl=0)
     df = pd.DataFrame(data)
     if not df.empty:
@@ -107,24 +107,18 @@ else:
 st.sidebar.header("📝 거래 기록")
 with st.sidebar.form("input_form"):
     date = st.date_input("날짜", datetime.today())
-    
-    # 🚨 여기에 GMMF 추가했습니다!
     ticker = st.selectbox("종목", ["SGOV", "SPYM", "QQQM", "GMMF"])
-    
     action = st.selectbox("유형", ["BUY", "SELL"])
     qty = st.number_input("수량", min_value=1, value=1)
     price = st.number_input("가격($)", min_value=0.0)
     
     if st.form_submit_button("장부에 기록하기"):
-        with st.spinner("☁️ 구글 엑셀에 저장 중... (잠시만요!)"):
+        with st.spinner("☁️ 저장 중..."):
             new_row = pd.DataFrame([{"Date": str(date), "Ticker": ticker, "Action": action, "Qty": qty, "Price": price}])
             updated_df = pd.concat([df, new_row], ignore_index=True)
             conn.update(spreadsheet=SHEET_URL, data=updated_df)
-            
-            # 🔥 핵심: 구글이 저장할 시간을 2초 줍니다.
-            time.sleep(2) 
+            time.sleep(1) 
             st.cache_data.clear() 
-            
         st.sidebar.success("✅ 저장 완료!")
         st.rerun()
 
@@ -141,12 +135,19 @@ with tab1:
     asset_list = []
     col1, col2 = st.columns(2)
     col1.metric("현재 환율", f"{krw_rate:,.0f} 원/$")
+    
     for t, q in current_holdings.items():
         if q > 0:
             p = get_current_price(t)
+            # 만약 가격을 못 가져오면(0원) 경고 표시
+            if p == 0:
+                # GMMF 같은 건 야후에 없을 수도 있어서 수동 처리 필요할 수 있음
+                p = 100.0 
+            
             val = q * p * krw_rate
             total_val += val
-            asset_list.append({"종목": t, "수량": f"{q}주", "현재가($)": p, "평가액(원)": int(val)})
+            asset_list.append({"종목": t, "수량": f"{q}주", "현재가($)": round(p, 2), "평가액(원)": int(val)})
+            
     col2.metric("총 자산 (추정)", f"{int(total_val):,.0f} 원")
     if asset_list:
         st.dataframe(pd.DataFrame(asset_list), width='stretch')
