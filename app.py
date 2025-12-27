@@ -13,13 +13,13 @@ st.set_page_config(page_title="Project Aegis V2", layout="wide")
 # 구글 시트 연결
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 🚨 선생님의 엑셀 주소 (수정 완료)
+# 🚨 선생님의 엑셀 주소
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
 # ==========================================
 # 1. 핵심 엔진 (크롤링 & AI)
 # ==========================================
-@st.cache_data(ttl=300) # 5분마다 갱신 (속도 향상)
+@st.cache_data(ttl=300) # 5분마다 갱신
 def get_current_price(ticker):
     """Finviz에서 실시간 주가 가져오기"""
     try:
@@ -45,11 +45,11 @@ def get_usd_krw():
         return 1450.0
 
 # ==========================================
-# 2. AI 리밸런싱 로직 (V1 기능 복구)
+# 2. AI 리밸런싱 로직
 # ==========================================
 class Rebalancer:
     def __init__(self, current_holdings):
-        # 목표 비중 (여기서 비율 수정 가능)
+        # 목표 비중
         self.TARGET_RATIO = {'SGOV': 0.30, 'SPYM': 0.35, 'QQQM': 0.35} 
         self.holdings = current_holdings
 
@@ -96,14 +96,13 @@ st.title("🛡️ Project Aegis V2.5")
 try:
     data = conn.read(spreadsheet=SHEET_URL, usecols=[0, 1, 2, 3, 4])
     df = pd.DataFrame(data)
-    # 날짜순 정렬
     if not df.empty:
         df = df.sort_values(by="Date", ascending=False)
 except Exception as e:
     st.error(f"DB 연결 오류: {e}")
     df = pd.DataFrame(columns=["Date", "Ticker", "Action", "Qty", "Price"])
 
-# 현재 보유량 계산 (DB 기반)
+# 현재 보유량 계산
 if not df.empty:
     current_holdings = df.groupby("Ticker").apply(
         lambda x: x.loc[x['Action']=='BUY', 'Qty'].sum() - x.loc[x['Action']=='SELL', 'Qty'].sum()
@@ -115,7 +114,7 @@ else:
 # 4. 화면 구성 (UI)
 # ==========================================
 
-# [사이드바] 거래 입력 & 투자금 설정
+# [사이드바] 거래 입력
 st.sidebar.header("📝 거래 기록 (DB 저장)")
 with st.sidebar.form("input_form"):
     date = st.date_input("날짜", datetime.today())
@@ -142,7 +141,7 @@ st.sidebar.header("💰 AI 분석 설정")
 investment = st.sidebar.number_input("이번 달 여유 현금 (원)", min_value=0, value=0, step=10000)
 run_ai = st.sidebar.button("AI 분석 실행")
 
-# [메인 화면] 탭 구성
+# [메인 화면]
 tab1, tab2, tab3 = st.tabs(["📊 자산 현황", "🤖 AI 분석", "📋 거래 장부"])
 
 # 탭 1: 자산 현황
@@ -164,8 +163,8 @@ with tab1:
     col2.metric("총 자산 (추정)", f"{int(total_val):,.0f} 원")
     
     if asset_list:
-        st.dataframe(pd.DataFrame(asset_list), use_container_width=True)
-        # 간단한 그래프
+        # 🚨 수정된 부분: width='stretch' 사용
+        st.dataframe(pd.DataFrame(asset_list), width='stretch')
         chart_data = pd.DataFrame(asset_list).set_index("종목")["평가액(원)"]
         st.bar_chart(chart_data)
     else:
@@ -191,7 +190,8 @@ with tab2:
     else:
         st.info("👈 왼쪽 사이드바에서 투자금을 입력하고 [AI 분석 실행]을 눌러주세요.")
 
-# 탭 3: 거래 장부 (전체 기록 확인)
+# 탭 3: 거래 장부
 with tab3:
     st.subheader("📋 전체 거래 내역 (최신순)")
-    st.dataframe(df, use_container_width=True)
+    # 🚨 수정된 부분: width='stretch' 사용
+    st.dataframe(df, width='stretch')
