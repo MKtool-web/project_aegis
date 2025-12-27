@@ -8,7 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
 # ==========================================
-# 0. 기본 설정
+# 0. 기본 설정 (이 제목이 보여야 성공입니다!)
 # ==========================================
 st.set_page_config(page_title="Project Aegis V10.1", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -28,7 +28,6 @@ def send_test_message():
 # 1. 데이터 관리 (삭제 및 읽기)
 # ==========================================
 def delete_data_by_index(worksheet_name, index_to_delete):
-    """특정 행 삭제 함수"""
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet=worksheet_name, ttl=0)
         if index_to_delete in df.index:
@@ -80,11 +79,10 @@ def log_cash_flow(date, type_, krw, usd, rate):
         conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=pd.concat([df, new_row], ignore_index=True))
     except: st.error("CashFlow 시트 오류")
 
-# 🔥 [NEW] 과거 추세 역산 함수 (차트용)
+# 추세 그래프용 데이터 복원
 def calculate_history(df_stock, df_cash):
     if df_stock.empty and df_cash.empty: return pd.DataFrame()
     
-    # 모든 날짜 범위 생성
     dates = []
     if not df_stock.empty: dates.append(pd.to_datetime(df_stock['Date']).min())
     if not df_cash.empty: dates.append(pd.to_datetime(df_cash['Date']).min())
@@ -96,31 +94,28 @@ def calculate_history(df_stock, df_cash):
     date_range = pd.date_range(start=start_date, end=end_date)
     
     history = []
-    
-    # 누적 변수 초기화
     cum_cash_krw = 0
     cum_cash_usd = 0
-    cum_invested_krw = 0 # 총 투자 원금
+    cum_invested_krw = 0 
     cum_stock_qty = {'SGOV':0, 'SPYM':0, 'QQQM':0, 'GMMF':0}
     
-    # 데이터프레임 날짜 정렬
     df_s = df_stock.copy()
     df_s['Date'] = pd.to_datetime(df_s['Date'])
     df_c = df_cash.copy()
     df_c['Date'] = pd.to_datetime(df_c['Date'])
 
     for d in date_range:
-        # 1. 입출금/환전 반영
+        # 입출금 반영
         day_cash = df_c[df_c['Date'] == d]
         for _, row in day_cash.iterrows():
             if row['Type'] == 'Deposit': 
                 cum_cash_krw += row['Amount_KRW']
-                cum_invested_krw += row['Amount_KRW'] # 투자 원금 증가
+                cum_invested_krw += row['Amount_KRW']
             elif row['Type'] == 'Exchange':
                 cum_cash_krw -= row['Amount_KRW']
                 cum_cash_usd += row['Amount_USD']
         
-        # 2. 주식 거래 반영
+        # 주식 거래 반영
         day_stock = df_s[df_s['Date'] == d]
         for _, row in day_stock.iterrows():
             cost = (row['Qty'] * row['Price']) + row['Fee']
@@ -135,8 +130,6 @@ def calculate_history(df_stock, df_cash):
                 net_div = row['Price'] - row['Fee']
                 cum_cash_usd += net_div
 
-        # 3. 그 날의 상태 기록
-        # (그래프를 위해 추정 자산 가치도 계산하면 좋지만, 속도상 수량/현금 추이만 기록)
         history.append({
             "Date": d,
             "Total_Invested": cum_invested_krw,
@@ -150,14 +143,13 @@ def calculate_history(df_stock, df_cash):
     return pd.DataFrame(history)
 
 # ==========================================
-# 3. 로딩 (기존 Sheet1 사용)
+# 3. 로딩 (기존 시트 사용)
 # ==========================================
+st.title("🛡️ Project Aegis V10.1 (Final Complete)")
+
 try:
-    # 기존 시트 그대로 읽어옴
     df_stock = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0).sort_values(by="Date", ascending=False).fillna(0)
-except: 
-    # 만약 진짜 없으면 빈 프레임 (하지만 선생님 시트는 있으니 여기로 안 빠질 겁니다)
-    df_stock = pd.DataFrame()
+except: df_stock = pd.DataFrame()
 
 try:
     df_cash = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0).fillna(0)
@@ -167,7 +159,7 @@ my_wallet = get_wallet_balance()
 krw_rate = get_usd_krw()
 
 # ==========================================
-# 4. 사이드바 (Action에 따른 동적 UI)
+# 4. 사이드바
 # ==========================================
 st.sidebar.header("🏦 자금 관리")
 c1, c2 = st.sidebar.columns(2)
@@ -178,7 +170,6 @@ mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "�
 
 if mode == "입금/환전":
     st.sidebar.subheader("💱 입금 및 환전")
-    # 폼 밖에서 선택 (즉시 반응)
     act_type = st.sidebar.selectbox("종류", ["원화 입금 (Deposit)", "달러 환전 (Exchange)"])
     
     with st.sidebar.form("cash_form"):
@@ -186,7 +177,6 @@ if mode == "입금/환전":
         label_amt = "입금할 원화 금액" if "Deposit" in act_type else "환전에 쓴 원화 금액"
         amount_krw = st.number_input(label_amt, step=10000)
         
-        # 환전일 때만 환율 입력창 등장
         ex_rate_in = krw_rate
         if "Exchange" in act_type:
             ex_rate_in = st.number_input("적용 환율", value=krw_rate, format="%.2f")
@@ -211,33 +201,29 @@ if mode == "입금/환전":
 
 elif mode == "주식 거래":
     st.sidebar.subheader("📈 주식 매매 & 배당")
-    # 🔥 폼 밖으로 뺐습니다 (배당 선택 시 수량 칸 숨기기 위해)
     ticker = st.sidebar.selectbox("종목", ["SGOV", "SPYM", "QQQM", "GMMF"])
     action = st.sidebar.selectbox("유형", ["BUY", "SELL", "DIVIDEND"])
     
     with st.sidebar.form("stock_form"):
         date = st.date_input("날짜", datetime.today())
         
-        # 🔥 배당(DIVIDEND)이면 수량 칸 숨김!
         qty = 1.0
+        # 🔥 배당(DIVIDEND)이 아닐 때만 수량 칸 보여줌
         if action != "DIVIDEND":
             qty = st.number_input("수량 (Qty)", value=1.0, step=0.01)
         
-        # 가격 라벨 변경
         price_label = "배당금 총액 ($)" if action == "DIVIDEND" else "체결 단가 ($)"
+        
         cur_p = 0.0
         if action != "DIVIDEND": cur_p = get_current_price(ticker)
-        
         price = st.number_input(price_label, value=cur_p if cur_p>0 else 0.0, format="%.2f")
         
-        # 수수료 설명
         fee_help = "세금/수수료 (배당은 세후면 0)"
         fee = st.number_input("수수료 ($)", value=0.0, help=fee_help, format="%.2f")
         rate = st.number_input("환율", value=krw_rate, format="%.2f")
 
         if st.form_submit_button("기록하기"):
-            if action == "DIVIDEND": qty = 1.0 # 배당은 수량 1 고정
-
+            if action == "DIVIDEND": qty = 1.0 
             cost = (qty * price) + fee
             
             if action == "BUY":
@@ -252,7 +238,6 @@ elif mode == "주식 거래":
             elif action == "DIVIDEND":
                 new = pd.DataFrame([{"Date": str(date), "Ticker": ticker, "Action": action, "Qty": 1.0, "Price": price, "Exchange_Rate": rate, "Fee": fee}])
                 conn.update(spreadsheet=SHEET_URL, worksheet="Sheet1", data=pd.concat([df_stock, new], ignore_index=True))
-                # 배당 수입 (수수료 차감 후 입금)
                 net_div = price - fee
                 update_wallet('USD', net_div, "add")
                 st.success("💰 배당금 입금")
@@ -262,16 +247,14 @@ elif mode == "주식 거래":
 
 elif mode == "🗑️ 데이터 삭제":
     st.sidebar.subheader("⚠️ 데이터 삭제")
-    st.sidebar.caption("잘못 입력한 내역을 선택해서 지웁니다.")
-    
+    st.sidebar.caption("잘못 입력한 내역을 지웁니다.")
     target_sheet = st.sidebar.radio("대상", ["주식 거래 내역", "자금 흐름 내역"])
     
     if target_sheet == "주식 거래 내역":
         if not df_stock.empty:
-            # 보기 좋게 포맷팅
-            del_idx = st.sidebar.selectbox("삭제할 항목 선택", df_stock.index, 
-                                           format_func=lambda x: f"[{df_stock.at[x,'Date']}] {df_stock.at[x,'Ticker']} {df_stock.at[x,'Action']} ({df_stock.at[x,'Price']}$)")
-            if st.sidebar.button("선택 항목 삭제"):
+            del_idx = st.sidebar.selectbox("삭제할 항목", df_stock.index, 
+                                           format_func=lambda x: f"[{df_stock.at[x,'Date']}] {df_stock.at[x,'Ticker']} {df_stock.at[x,'Action']} (${df_stock.at[x,'Price']})")
+            if st.sidebar.button("삭제 실행"):
                 if delete_data_by_index("Sheet1", del_idx):
                     st.success("삭제 완료!")
                     time.sleep(1)
@@ -279,9 +262,9 @@ elif mode == "🗑️ 데이터 삭제":
         else: st.sidebar.info("기록이 없습니다.")
     else:
         if not df_cash.empty:
-            del_idx = st.sidebar.selectbox("삭제할 항목 선택", df_cash.index, 
+            del_idx = st.sidebar.selectbox("삭제할 항목", df_cash.index, 
                                            format_func=lambda x: f"[{df_cash.at[x,'Date']}] {df_cash.at[x,'Type']} ({int(df_cash.at[x,'Amount_KRW']):,}원)")
-            if st.sidebar.button("선택 항목 삭제"):
+            if st.sidebar.button("삭제 실행"):
                 if delete_data_by_index("CashFlow", del_idx):
                     st.success("삭제 완료!")
                     time.sleep(1)
@@ -293,7 +276,6 @@ if st.sidebar.button("🔔 텔레그램 테스트"): send_test_message()
 # ==========================================
 # 5. 메인 대시보드
 # ==========================================
-# 자산 계산
 current_holdings = {}
 total_stock_val_krw = 0
 asset_details = []
@@ -352,32 +334,20 @@ with tab1:
 with tab2:
     st.subheader("📈 자산 변화 추이")
     history_df = calculate_history(df_stock, df_cash)
-    
     if not history_df.empty:
         chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고", "총 투자원금"], horizontal=True)
-        
         if chart_opt == "보유 수량":
-            # Wide to Long 변환
             long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM'], var_name='Ticker', value_name='Qty')
-            c = alt.Chart(long_df).mark_line(point=True).encode(
-                x='Date', y='Qty', color='Ticker', tooltip=['Date', 'Ticker', 'Qty']
-            ).interactive()
+            c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Qty', color='Ticker', tooltip=['Date', 'Ticker', 'Qty']).interactive()
             st.altair_chart(c, use_container_width=True)
-            
         elif chart_opt == "현금 잔고":
             long_df = history_df.melt('Date', value_vars=['Cash_KRW', 'Cash_USD'], var_name='Currency', value_name='Amount')
-            c = alt.Chart(long_df).mark_line(point=True).encode(
-                x='Date', y='Amount', color='Currency', tooltip=['Date', 'Currency', 'Amount']
-            ).interactive()
+            c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Amount', color='Currency', tooltip=['Date', 'Currency', 'Amount']).interactive()
             st.altair_chart(c, use_container_width=True)
-            
         elif chart_opt == "총 투자원금":
-            c = alt.Chart(history_df).mark_line(point=True, color='red').encode(
-                x='Date', y='Total_Invested', tooltip=['Date', 'Total_Invested']
-            ).interactive()
+            c = alt.Chart(history_df).mark_line(point=True, color='red').encode(x='Date', y='Total_Invested', tooltip=['Date', 'Total_Invested']).interactive()
             st.altair_chart(c, use_container_width=True)
-    else:
-        st.info("아직 추세를 그릴 데이터가 부족합니다.")
+    else: st.info("데이터가 부족합니다.")
 
 with tab3:
     st.subheader("📝 주식 거래 내역")
