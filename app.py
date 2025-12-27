@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V11.3 (Auto-Header Fix)", layout="wide")
+st.set_page_config(page_title="Project Aegis V11.4 (Debug)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -25,7 +25,7 @@ def send_test_message():
         st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
-# 1. 데이터 엔진 (안전장치 강화)
+# 1. 데이터 엔진 (정밀 계산)
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
@@ -41,69 +41,91 @@ def get_usd_krw():
         return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
     except: return 1450.0
 
-# 🔥 [핵심 수정] 컬럼이 없으면 계산하지 않고 0을 반환 (에러 방지)
-def calculate_wallet_balance(df_stock, df_cash):
-    # 필수 컬럼 검사
-    required_cash_cols = ['Type', 'Amount_KRW', 'Amount_USD']
-    if df_cash.empty or not all(col in df_cash.columns for col in required_cash_cols):
-        return {'KRW': 0, 'USD': 0}
-        
-    krw_deposit = df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
-    krw_used = df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
-    current_krw = krw_deposit - krw_used
-
-    usd_gained = df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
+# 🔥 [핵심] 모든 데이터를 숫자로 강제 변환 후 계산 (오차 제거)
+def calculate_wallet_balance_detail(df_stock, df_cash):
+    # 1. 현금 흐름 계산
+    krw_deposit = 0
+    krw_used = 0
+    usd_gained = 0
     
+    if not df_cash.empty:
+        # 강제 형변환 (문자열 '1,000' 등 처리)
+        for col in ['Amount_KRW', 'Amount_USD']:
+            if col in df_cash.columns:
+                df_cash[col] = pd.to_numeric(df_cash[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
+        
+        krw_deposit = df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
+        krw_used = df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
+        usd_gained = df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
+
+    # 2. 주식 거래 계산
     usd_spent = 0
     usd_earned = 0
-    
-    # 주식 데이터 컬럼 검사
-    if not df_stock.empty and 'Action' in df_stock.columns and 'Qty' in df_stock.columns:
-        buys = df_stock[df_stock['Action'] == 'BUY']
-        if not buys.empty:
-            usd_spent = ((buys['Qty'] * buys['Price']) + buys['Fee']).sum()
-        
-        sells = df_stock[df_stock['Action'] == 'SELL']
-        if not sells.empty:
-            usd_earned += ((sells['Qty'] * sells['Price']) - sells['Fee']).sum()
-        
-        divs = df_stock[df_stock['Action'] == 'DIVIDEND']
-        if not divs.empty:
-            usd_earned += (divs['Price'] - divs['Fee']).sum()
+    stock_details = []
 
+    if not df_stock.empty:
+        # 강제 형변환
+        for col in ['Qty', 'Price', 'Fee']:
+            if col in df_stock.columns:
+                df_stock[col] = pd.to_numeric(df_stock[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
+
+        # 매수 (비용 발생)
+        buys = df_stock[df_stock['Action'] == 'BUY']
+        for _, row in buys.iterrows():
+            cost = (row['Qty'] * row['Price']) + row['Fee']
+            usd_spent += cost
+            stock_details.append(f"[-] 매수 {row['Ticker']}: ${cost:.2f} (단가 {row['Price']} x {row['Qty']} + 수수료 {row['Fee']})")
+
+        # 매도 (수익 발생)
+        sells = df_stock[df_stock['Action'] == 'SELL']
+        for _, row in sells.iterrows():
+            revenue = (row['Qty'] * row['Price']) - row['Fee']
+            usd_earned += revenue
+            stock_details.append(f"[+] 매도 {row['Ticker']}: ${revenue:.2f}")
+            
+        # 배당 (수익 발생)
+        divs = df_stock[df_stock['Action'] == 'DIVIDEND']
+        for _, row in divs.iterrows():
+            revenue = row['Price'] - row['Fee']
+            usd_earned += revenue
+            stock_details.append(f"[+] 배당 {row['Ticker']}: ${revenue:.2f}")
+
+    current_krw = krw_deposit - krw_used
     current_usd = usd_gained - usd_spent + usd_earned
-    return {'KRW': current_krw, 'USD': current_usd}
+    
+    return {
+        'KRW': current_krw, 
+        'USD': current_usd,
+        'Detail_USD_In': usd_gained,
+        'Detail_USD_Out': usd_spent,
+        'Detail_USD_Earned': usd_earned,
+        'Stock_Log': stock_details
+    }
 
 def log_cash_flow(date, type_, krw, usd, rate):
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0)
-        # 만약 컬럼이 깨져있으면 강제 복구
         if 'Type' not in df.columns:
-            df = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
-            
+             df = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
         date_str = date.strftime("%Y-%m-%d")
         new_row = pd.DataFrame([{"Date": date_str, "Type": type_, "Amount_KRW": krw, "Amount_USD": usd, "Ex_Rate": rate}])
         conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=pd.concat([df, new_row], ignore_index=True))
-    except: st.error("CashFlow 시트 오류 (헤더를 확인하세요)")
+    except: st.error("CashFlow 시트 오류")
 
 def log_stock_trade(date, ticker, action, qty, price, rate, fee):
     try:
-        # 스마트 시트 이름 감지
         sheet_name = "Sheet1"
-        try:
-            conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
-        except:
-            sheet_name = "시트1"
-
+        try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
+        except: sheet_name = "시트1"
+        
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
         date_str = date.strftime("%Y-%m-%d")
         new_row = pd.DataFrame([{"Date": date_str, "Ticker": ticker, "Action": action, "Qty": qty, "Price": price, "Exchange_Rate": rate, "Fee": fee}])
         conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=pd.concat([df, new_row], ignore_index=True))
-    except: st.error("시트 이름 오류")
+    except: st.error("시트 오류")
 
 def delete_data_by_date(target_date_str):
     try:
-        # 시트 이름 감지
         sheet_name = "Sheet1"
         try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
         except: sheet_name = "시트1"
@@ -120,19 +142,14 @@ def delete_data_by_date(target_date_str):
             df_c = df_c[df_c['Date'] != target_date_str]
             conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=df_c)
         return True
-    except Exception as e:
-        st.error(f"삭제 오류: {e}")
-        return False
+    except: return False
 
 def calculate_history(df_stock, df_cash):
-    # 방어 코드: 데이터가 없거나 컬럼이 깨지면 빈 결과 반환
     if df_stock.empty and df_cash.empty: return pd.DataFrame()
-    if not df_stock.empty and 'Date' not in df_stock.columns: return pd.DataFrame()
-    if not df_cash.empty and 'Date' not in df_cash.columns: return pd.DataFrame()
     
     dates = []
-    if not df_stock.empty: dates.append(pd.to_datetime(df_stock['Date']).min())
-    if not df_cash.empty: dates.append(pd.to_datetime(df_cash['Date']).min())
+    if not df_stock.empty and 'Date' in df_stock.columns: dates.append(pd.to_datetime(df_stock['Date']).min())
+    if not df_cash.empty and 'Date' in df_cash.columns: dates.append(pd.to_datetime(df_cash['Date']).min())
     if not dates: return pd.DataFrame()
     
     start_date = min(dates)
@@ -145,13 +162,19 @@ def calculate_history(df_stock, df_cash):
     cum_invested_krw = 0 
     cum_stock_qty = {'SGOV':0, 'SPYM':0, 'QQQM':0, 'GMMF':0}
     
+    # 데이터 정리
     df_s = df_stock.copy()
-    df_s['Date'] = pd.to_datetime(df_s['Date'])
+    if not df_s.empty:
+        df_s['Date'] = pd.to_datetime(df_s['Date'])
+        for col in ['Qty', 'Price', 'Fee']: df_s[col] = pd.to_numeric(df_s[col], errors='coerce').fillna(0)
+            
     df_c = df_cash.copy()
-    df_c['Date'] = pd.to_datetime(df_c['Date'])
+    if not df_c.empty:
+        df_c['Date'] = pd.to_datetime(df_c['Date'])
+        for col in ['Amount_KRW', 'Amount_USD']: df_c[col] = pd.to_numeric(df_c[col], errors='coerce').fillna(0)
 
     for d in date_range:
-        if 'Type' in df_c.columns:
+        if not df_c.empty:
             day_cash = df_c[df_c['Date'] == d]
             for _, row in day_cash.iterrows():
                 if row['Type'] == 'Deposit': 
@@ -161,7 +184,7 @@ def calculate_history(df_stock, df_cash):
                     cum_cash_krw -= row['Amount_KRW']
                     cum_cash_usd += row['Amount_USD']
         
-        if 'Action' in df_s.columns:
+        if not df_s.empty:
             day_stock = df_s[df_s['Date'] == d]
             for _, row in day_stock.iterrows():
                 cost = (row['Qty'] * row['Price']) + row['Fee']
@@ -189,20 +212,17 @@ def calculate_history(df_stock, df_cash):
     return pd.DataFrame(history)
 
 # ==========================================
-# 3. 로딩 (자동 복구 로직 포함)
+# 3. 로딩 및 자동 복구
 # ==========================================
-st.title("🛡️ Project Aegis V11.3 (Auto-Fix)")
+st.title("🛡️ Project Aegis V11.4 (Detail Debug)")
 
-# 1. 주식 시트 로딩 & 헤더 검사
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
 except: sheet_name = "시트1"
 
 try:
     df_stock = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0).fillna(0)
-    # 헤더가 깨졌는지 확인 (Date 컬럼 부재 시)
     if 'Date' not in df_stock.columns:
-        st.toast(f"⚠️ {sheet_name} 헤더 복구 중...")
         empty_stock = pd.DataFrame(columns=["Date", "Ticker", "Action", "Qty", "Price", "Exchange_Rate", "Fee"])
         conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=empty_stock)
         df_stock = empty_stock
@@ -211,12 +231,9 @@ try:
         df_stock = df_stock.sort_values(by="Date", ascending=False)
 except: df_stock = pd.DataFrame()
 
-# 2. 자금 시트 로딩 & 헤더 검사
 try:
     df_cash = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0).fillna(0)
-    # 헤더가 깨졌는지 확인 (Type 컬럼 부재 시)
     if 'Type' not in df_cash.columns:
-        st.toast("⚠️ CashFlow 헤더 복구 중...")
         empty_cash = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
         conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=empty_cash)
         df_cash = empty_cash
@@ -224,7 +241,8 @@ try:
         df_cash['Date'] = pd.to_datetime(df_cash['Date']).dt.strftime("%Y-%m-%d")
 except: df_cash = pd.DataFrame()
 
-my_wallet = calculate_wallet_balance(df_stock, df_cash)
+# 정밀 계산 실행
+wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 krw_rate = get_usd_krw()
 
 # ==========================================
@@ -232,8 +250,8 @@ krw_rate = get_usd_krw()
 # ==========================================
 st.sidebar.header("🏦 자금 관리")
 c1, c2 = st.sidebar.columns(2)
-c1.metric("🇰🇷 원화", f"{int(my_wallet['KRW']):,}원")
-c2.metric("🇺🇸 달러", f"${my_wallet['USD']:.2f}")
+c1.metric("🇰🇷 원화", f"{int(wallet_data['KRW']):,}원")
+c2.metric("🇺🇸 달러", f"${wallet_data['USD']:.2f}")
 
 mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "🗑️ 데이터 관리"], horizontal=True)
 
@@ -257,11 +275,11 @@ if mode == "입금/환전":
                 log_cash_flow(date, "Deposit", amount_krw, 0, 0)
                 st.success("💰 입금 완료!")
             else:
-                if my_wallet['KRW'] >= amount_krw:
+                if wallet_data['KRW'] >= amount_krw:
                     usd_out = amount_krw / ex_rate_in
                     log_cash_flow(date, "Exchange", amount_krw, usd_out, ex_rate_in)
                     st.success("💱 환전 완료!")
-                else: st.error("❌ 잔고 부족! (입금 내역을 먼저 기록하세요)")
+                else: st.error("❌ 잔고 부족!")
             time.sleep(1)
             st.rerun()
 
@@ -272,18 +290,15 @@ elif mode == "주식 거래":
     
     with st.sidebar.form("stock_form"):
         date = st.date_input("날짜", datetime.today())
-        
         qty = 1.0
-        if action != "DIVIDEND":
-            qty = st.number_input("수량 (Qty)", value=1.0, step=0.01)
+        if action != "DIVIDEND": qty = st.number_input("수량 (Qty)", value=1.0, step=0.01)
         
         price_label = "배당금 총액 ($)" if action == "DIVIDEND" else "체결 단가 ($)"
         cur_p = 0.0
         if action != "DIVIDEND": cur_p = get_current_price(ticker)
         price = st.number_input(price_label, value=cur_p if cur_p>0 else 0.0, format="%.2f")
         
-        fee_help = "세금/수수료 (배당은 세후면 0)"
-        fee = st.number_input("수수료 ($)", value=0.0, help=fee_help, format="%.2f")
+        fee = st.number_input("수수료 ($)", value=0.0, format="%.2f")
         rate = st.number_input("환율", value=krw_rate, format="%.2f")
 
         if st.form_submit_button("기록하기"):
@@ -291,35 +306,33 @@ elif mode == "주식 거래":
             cost = (qty * price) + fee
             
             if action == "BUY":
-                if my_wallet['USD'] >= cost:
+                if wallet_data['USD'] >= cost:
                     log_stock_trade(date, ticker, action, qty, price, rate, fee)
                     st.success("✅ 매수 완료")
                     time.sleep(1)
                     st.rerun()
-                else: st.error("❌ 달러 부족! (환전 내역을 먼저 기록하세요)")
+                else: st.error("❌ 달러 부족!")
             elif action == "DIVIDEND":
                 log_stock_trade(date, ticker, action, 1.0, price, rate, fee)
                 st.success("💰 배당금 입금")
                 time.sleep(1)
                 st.rerun()
-            else: st.warning("매도 기록만 됩니다.")
+            else: st.warning("매도 기록됨")
 
 elif mode == "🗑️ 데이터 관리":
     st.sidebar.subheader("📅 날짜별 삭제")
-    
     available_dates = set()
     if not df_stock.empty and 'Date' in df_stock.columns: available_dates.update(df_stock['Date'].unique())
     if not df_cash.empty and 'Date' in df_cash.columns: available_dates.update(df_cash['Date'].unique())
     
     if available_dates:
         target_date = st.sidebar.selectbox("삭제할 날짜", sorted(list(available_dates), reverse=True))
-        if st.sidebar.button("🚨 해당 날짜 데이터 영구 삭제"):
+        if st.sidebar.button("🚨 해당 날짜 데이터 삭제"):
             if delete_data_by_date(target_date):
-                st.success(f"{target_date} 데이터가 모두 삭제되었습니다. 잔고가 자동 재계산됩니다.")
+                st.success("삭제 완료")
                 time.sleep(2)
                 st.rerun()
-    else:
-        st.sidebar.caption("삭제할 데이터가 없습니다.")
+    else: st.sidebar.caption("데이터 없음")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🔔 텔레그램 테스트"): send_test_message()
@@ -332,7 +345,10 @@ total_stock_val_krw = 0
 asset_details = []
 
 if not df_stock.empty and 'Action' in df_stock.columns:
+    # 문자열 숫자로 변환 (안전장치)
+    df_stock['Qty'] = pd.to_numeric(df_stock['Qty'], errors='coerce').fillna(0)
     current_holdings = df_stock.groupby("Ticker").apply(lambda x: x.loc[x['Action']=='BUY','Qty'].sum() - x.loc[x['Action']=='SELL','Qty'].sum()).to_dict()
+    
     for t, q in current_holdings.items():
         if q > 0:
             p = get_current_price(t)
@@ -343,9 +359,10 @@ if not df_stock.empty and 'Action' in df_stock.columns:
 
 total_deposit = 0
 if not df_cash.empty and 'Type' in df_cash.columns:
+    df_cash['Amount_KRW'] = pd.to_numeric(df_cash['Amount_KRW'], errors='coerce').fillna(0)
     total_deposit = df_cash[df_cash['Type']=='Deposit']['Amount_KRW'].sum()
 
-total_asset = total_stock_val_krw + my_wallet['KRW'] + (my_wallet['USD'] * krw_rate)
+total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * krw_rate)
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
@@ -359,14 +376,25 @@ with tab1:
     col4.metric("현재 환율", f"{krw_rate:,.0f}원")
     st.markdown("---")
 
+    # 🔥 [DEBUG] 잔고 상세 내역 (오차 원인 찾기)
+    with st.expander("🔍 잔고 계산 내역 상세 (오차 원인 찾기)"):
+        st.write(f"**1. 총 환전 입금 (+):** ${wallet_data['Detail_USD_In']:.2f}")
+        st.write(f"**2. 주식 매수 총액 (-):** ${wallet_data['Detail_USD_Out']:.2f}")
+        st.write(f"**3. 매도/배당 수익 (+):** ${wallet_data['Detail_USD_Earned']:.2f}")
+        st.write(f"**= 최종 달러 잔고:** ${wallet_data['USD']:.2f}")
+        st.markdown("---")
+        st.write("**📝 세부 지출 로그:**")
+        for log in wallet_data['Stock_Log']:
+            st.caption(log)
+
     c_chart1, c_chart2 = st.columns(2)
     with c_chart1:
         st.subheader("🍩 자산 구성")
         if total_asset > 0:
             asset_df = pd.DataFrame([
                 {"Type": "주식", "Value": total_stock_val_krw},
-                {"Type": "현금(KRW)", "Value": my_wallet['KRW']},
-                {"Type": "현금(USD)", "Value": my_wallet['USD'] * krw_rate}
+                {"Type": "현금(KRW)", "Value": wallet_data['KRW']},
+                {"Type": "현금(USD)", "Value": wallet_data['USD'] * krw_rate}
             ])
             base = alt.Chart(asset_df).encode(theta=alt.Theta("Value", stack=True))
             pie = base.mark_arc(outerRadius=120, innerRadius=60).encode(
@@ -374,7 +402,6 @@ with tab1:
             )
             text = base.mark_text(radius=140).encode(text=alt.Text("Value", format=",.0f"), order=alt.Order("Value", sort="descending"), color=alt.value("black"))
             st.altair_chart(pie + text, use_container_width=True)
-        else: st.info("자산이 없습니다.")
 
     with c_chart2:
         st.subheader("🥧 종목별 비중")
@@ -383,7 +410,6 @@ with tab1:
             base2 = alt.Chart(stock_df).encode(theta=alt.Theta("가치", stack=True))
             pie2 = base2.mark_arc(outerRadius=120).encode(color=alt.Color("종목"), tooltip=["종목", "가치", "수량"])
             st.altair_chart(pie2, use_container_width=True)
-        else: st.info("보유 주식이 없습니다.")
 
 with tab2:
     st.subheader("📈 자산 변화 추이")
