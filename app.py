@@ -8,25 +8,11 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
 # ==========================================
-# 0. 기본 설정 & 스마트 시트 감지
+# 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V11.2 (Smart Fix)", layout="wide")
+st.set_page_config(page_title="Project Aegis V11.3 (Auto-Header Fix)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
-
-# 🔥 [핵심] 시트 이름 자동 감지 (Sheet1 vs 시트1)
-def get_stock_sheet_name():
-    """Sheet1(영어)이 없으면 시트1(한글)을 찾습니다."""
-    try:
-        # 먼저 영어 이름 시도
-        conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
-        return "Sheet1"
-    except:
-        # 실패하면 한글 이름 시도
-        return "시트1"
-
-# 전역 변수로 시트 이름 확정
-STOCK_SHEET_NAME = get_stock_sheet_name()
 
 def send_test_message():
     try:
@@ -39,45 +25,7 @@ def send_test_message():
         st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
-# 1. 데이터 관리 (삭제 및 읽기)
-# ==========================================
-def delete_data_by_index(worksheet_name, index_to_delete):
-    try:
-        # 시트 이름이 Sheet1이면 스마트 감지된 이름 사용
-        target_sheet = STOCK_SHEET_NAME if worksheet_name == "Sheet1" else worksheet_name
-        
-        df = conn.read(spreadsheet=SHEET_URL, worksheet=target_sheet, ttl=0)
-        if index_to_delete in df.index:
-            df = df.drop(index_to_delete).reset_index(drop=True)
-            conn.update(spreadsheet=SHEET_URL, worksheet=target_sheet, data=df)
-            return True
-        return False
-    except Exception as e:
-        st.error(f"삭제 실패: {e}")
-        return False
-
-def delete_data_by_date(target_date_str):
-    try:
-        # 1. 주식 시트 (스마트 이름 사용)
-        df_s = conn.read(spreadsheet=SHEET_URL, worksheet=STOCK_SHEET_NAME, ttl=0)
-        if not df_s.empty and 'Date' in df_s.columns:
-            df_s['Date'] = df_s['Date'].astype(str)
-            df_s = df_s[df_s['Date'] != target_date_str]
-            conn.update(spreadsheet=SHEET_URL, worksheet=STOCK_SHEET_NAME, data=df_s)
-            
-        # 2. 자금 시트
-        df_c = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0)
-        if not df_c.empty and 'Date' in df_c.columns:
-            df_c['Date'] = df_c['Date'].astype(str)
-            df_c = df_c[df_c['Date'] != target_date_str]
-            conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=df_c)
-        return True
-    except Exception as e:
-        st.error(f"삭제 오류: {e}")
-        return False
-
-# ==========================================
-# 2. 데이터 엔진 (Log Logic)
+# 1. 데이터 엔진 (안전장치 강화)
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
@@ -93,8 +41,11 @@ def get_usd_krw():
         return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
     except: return 1450.0
 
+# 🔥 [핵심 수정] 컬럼이 없으면 계산하지 않고 0을 반환 (에러 방지)
 def calculate_wallet_balance(df_stock, df_cash):
-    if df_cash.empty or 'Type' not in df_cash.columns:
+    # 필수 컬럼 검사
+    required_cash_cols = ['Type', 'Amount_KRW', 'Amount_USD']
+    if df_cash.empty or not all(col in df_cash.columns for col in required_cash_cols):
         return {'KRW': 0, 'USD': 0}
         
     krw_deposit = df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
@@ -106,7 +57,8 @@ def calculate_wallet_balance(df_stock, df_cash):
     usd_spent = 0
     usd_earned = 0
     
-    if not df_stock.empty and 'Action' in df_stock.columns:
+    # 주식 데이터 컬럼 검사
+    if not df_stock.empty and 'Action' in df_stock.columns and 'Qty' in df_stock.columns:
         buys = df_stock[df_stock['Action'] == 'BUY']
         if not buys.empty:
             usd_spent = ((buys['Qty'] * buys['Price']) + buys['Fee']).sum()
@@ -125,21 +77,55 @@ def calculate_wallet_balance(df_stock, df_cash):
 def log_cash_flow(date, type_, krw, usd, rate):
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0)
+        # 만약 컬럼이 깨져있으면 강제 복구
+        if 'Type' not in df.columns:
+            df = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
+            
         date_str = date.strftime("%Y-%m-%d")
         new_row = pd.DataFrame([{"Date": date_str, "Type": type_, "Amount_KRW": krw, "Amount_USD": usd, "Ex_Rate": rate}])
         conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=pd.concat([df, new_row], ignore_index=True))
-    except: st.error("CashFlow 시트 오류")
+    except: st.error("CashFlow 시트 오류 (헤더를 확인하세요)")
 
 def log_stock_trade(date, ticker, action, qty, price, rate, fee):
     try:
-        # 스마트 이름 사용
-        df = conn.read(spreadsheet=SHEET_URL, worksheet=STOCK_SHEET_NAME, ttl=0)
+        # 스마트 시트 이름 감지
+        sheet_name = "Sheet1"
+        try:
+            conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
+        except:
+            sheet_name = "시트1"
+
+        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
         date_str = date.strftime("%Y-%m-%d")
         new_row = pd.DataFrame([{"Date": date_str, "Ticker": ticker, "Action": action, "Qty": qty, "Price": price, "Exchange_Rate": rate, "Fee": fee}])
-        conn.update(spreadsheet=SHEET_URL, worksheet=STOCK_SHEET_NAME, data=pd.concat([df, new_row], ignore_index=True))
-    except: st.error(f"{STOCK_SHEET_NAME} 오류")
+        conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=pd.concat([df, new_row], ignore_index=True))
+    except: st.error("시트 이름 오류")
+
+def delete_data_by_date(target_date_str):
+    try:
+        # 시트 이름 감지
+        sheet_name = "Sheet1"
+        try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
+        except: sheet_name = "시트1"
+
+        df_s = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
+        if not df_s.empty and 'Date' in df_s.columns:
+            df_s['Date'] = df_s['Date'].astype(str)
+            df_s = df_s[df_s['Date'] != target_date_str]
+            conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=df_s)
+            
+        df_c = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0)
+        if not df_c.empty and 'Date' in df_c.columns:
+            df_c['Date'] = df_c['Date'].astype(str)
+            df_c = df_c[df_c['Date'] != target_date_str]
+            conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=df_c)
+        return True
+    except Exception as e:
+        st.error(f"삭제 오류: {e}")
+        return False
 
 def calculate_history(df_stock, df_cash):
+    # 방어 코드: 데이터가 없거나 컬럼이 깨지면 빈 결과 반환
     if df_stock.empty and df_cash.empty: return pd.DataFrame()
     if not df_stock.empty and 'Date' not in df_stock.columns: return pd.DataFrame()
     if not df_cash.empty and 'Date' not in df_cash.columns: return pd.DataFrame()
@@ -165,56 +151,76 @@ def calculate_history(df_stock, df_cash):
     df_c['Date'] = pd.to_datetime(df_c['Date'])
 
     for d in date_range:
-        day_cash = df_c[df_c['Date'] == d]
-        for _, row in day_cash.iterrows():
-            if row['Type'] == 'Deposit': 
-                cum_cash_krw += row['Amount_KRW']
-                cum_invested_krw += row['Amount_KRW']
-            elif row['Type'] == 'Exchange':
-                cum_cash_krw -= row['Amount_KRW']
-                cum_cash_usd += row['Amount_USD']
+        if 'Type' in df_c.columns:
+            day_cash = df_c[df_c['Date'] == d]
+            for _, row in day_cash.iterrows():
+                if row['Type'] == 'Deposit': 
+                    cum_cash_krw += row['Amount_KRW']
+                    cum_invested_krw += row['Amount_KRW']
+                elif row['Type'] == 'Exchange':
+                    cum_cash_krw -= row['Amount_KRW']
+                    cum_cash_usd += row['Amount_USD']
         
-        day_stock = df_s[df_s['Date'] == d]
-        for _, row in day_stock.iterrows():
-            cost = (row['Qty'] * row['Price']) + row['Fee']
-            if row['Action'] == 'BUY':
-                cum_cash_usd -= cost
-                cum_stock_qty[row['Ticker']] += row['Qty']
-            elif row['Action'] == 'SELL':
-                net_gain = (row['Qty'] * row['Price']) - row['Fee']
-                cum_cash_usd += net_gain
-                cum_stock_qty[row['Ticker']] -= row['Qty']
-            elif row['Action'] == 'DIVIDEND':
-                net_div = row['Price'] - row['Fee']
-                cum_cash_usd += net_div
+        if 'Action' in df_s.columns:
+            day_stock = df_s[df_s['Date'] == d]
+            for _, row in day_stock.iterrows():
+                cost = (row['Qty'] * row['Price']) + row['Fee']
+                if row['Action'] == 'BUY':
+                    cum_cash_usd -= cost
+                    cum_stock_qty[row['Ticker']] += row['Qty']
+                elif row['Action'] == 'SELL':
+                    net_gain = (row['Qty'] * row['Price']) - row['Fee']
+                    cum_cash_usd += net_gain
+                    cum_stock_qty[row['Ticker']] -= row['Qty']
+                elif row['Action'] == 'DIVIDEND':
+                    net_div = row['Price'] - row['Fee']
+                    cum_cash_usd += net_div
 
         history.append({
             "Date": d,
             "Total_Invested": cum_invested_krw,
             "Cash_KRW": cum_cash_krw,
             "Cash_USD": cum_cash_usd,
-            "Stock_SGOV": cum_stock_qty['SGOV'],
-            "Stock_QQQM": cum_stock_qty['QQQM'],
-            "Stock_SPYM": cum_stock_qty['SPYM']
+            "Stock_SGOV": cum_stock_qty.get('SGOV',0),
+            "Stock_QQQM": cum_stock_qty.get('QQQM',0),
+            "Stock_SPYM": cum_stock_qty.get('SPYM',0)
         })
         
     return pd.DataFrame(history)
 
 # ==========================================
-# 3. 로딩 (스마트 이름 적용)
+# 3. 로딩 (자동 복구 로직 포함)
 # ==========================================
-st.title("🛡️ Project Aegis V11.2 (Smart Fix)")
+st.title("🛡️ Project Aegis V11.3 (Auto-Fix)")
+
+# 1. 주식 시트 로딩 & 헤더 검사
+sheet_name = "Sheet1"
+try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
+except: sheet_name = "시트1"
 
 try:
-    df_stock = conn.read(spreadsheet=SHEET_URL, worksheet=STOCK_SHEET_NAME, ttl=0).fillna(0)
-    if not df_stock.empty and 'Date' in df_stock.columns:
+    df_stock = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0).fillna(0)
+    # 헤더가 깨졌는지 확인 (Date 컬럼 부재 시)
+    if 'Date' not in df_stock.columns:
+        st.toast(f"⚠️ {sheet_name} 헤더 복구 중...")
+        empty_stock = pd.DataFrame(columns=["Date", "Ticker", "Action", "Qty", "Price", "Exchange_Rate", "Fee"])
+        conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=empty_stock)
+        df_stock = empty_stock
+    else:
         df_stock['Date'] = pd.to_datetime(df_stock['Date']).dt.strftime("%Y-%m-%d")
         df_stock = df_stock.sort_values(by="Date", ascending=False)
 except: df_stock = pd.DataFrame()
 
+# 2. 자금 시트 로딩 & 헤더 검사
 try:
     df_cash = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0).fillna(0)
-    if not df_cash.empty and 'Date' in df_cash.columns:
+    # 헤더가 깨졌는지 확인 (Type 컬럼 부재 시)
+    if 'Type' not in df_cash.columns:
+        st.toast("⚠️ CashFlow 헤더 복구 중...")
+        empty_cash = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
+        conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=empty_cash)
+        df_cash = empty_cash
+    else:
         df_cash['Date'] = pd.to_datetime(df_cash['Date']).dt.strftime("%Y-%m-%d")
 except: df_cash = pd.DataFrame()
 
@@ -300,7 +306,6 @@ elif mode == "주식 거래":
 
 elif mode == "🗑️ 데이터 관리":
     st.sidebar.subheader("📅 날짜별 삭제")
-    st.sidebar.info("선택한 날짜의 '모든 기록(입금/환전/주식)'이 삭제됩니다.")
     
     available_dates = set()
     if not df_stock.empty and 'Date' in df_stock.columns: available_dates.update(df_stock['Date'].unique())
