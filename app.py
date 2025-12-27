@@ -12,6 +12,23 @@ from datetime import datetime, timedelta
 # 0. 기본 설정
 # ==========================================
 st.set_page_config(page_title="Project Aegis V18.0 (Final Complete)", layout="wide")
+
+# 🔒 [보안] 로그인 시스템
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if not st.session_state["authenticated"]:
+        user_input = st.text_input("🔑 접속 암호를 입력하세요:", type="password")
+        if st.button("로그인"):
+            if user_input == st.secrets["APP_PASSWORD"]:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("암호가 틀렸습니다.")
+        st.stop() # 암호가 맞을 때까지 여기서 멈춤
+
+check_password() # 보안 검문소 실행
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
