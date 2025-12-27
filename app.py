@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정
 # ==========================================
-st.set_page_config(page_title="Project Aegis V15.0 (Rebalancer)", layout="wide")
+st.set_page_config(page_title="Project Aegis V15.1 (Real-Asset Check)", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -184,7 +184,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V15.0 (Rebalancer)")
+st.title("🛡️ Project Aegis V15.1 (Real-Asset Check)")
 
 # 데이터 로딩
 sheet_name = "Sheet1"
@@ -213,27 +213,21 @@ wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
 
-# ==========================================
-# 4. 사이드바 (리밸런싱 설정 추가)
-# ==========================================
+# 사이드바
 st.sidebar.header("🏦 자금 관리")
 c1, c2 = st.sidebar.columns(2)
 c1.metric("🇰🇷 원화", f"{int(wallet_data['KRW']):,}원")
 c2.metric("🇺🇸 달러", f"${wallet_data['USD']:.2f}")
 
-# 🔥 [NEW] 리밸런싱 목표 설정 (비중 조절)
 st.sidebar.markdown("---")
 with st.sidebar.expander("🎯 목표 포트폴리오 설정"):
     st.caption("목표 비중 합계는 100%가 권장됩니다.")
     target_qqqm = st.slider("QQQM (성장)", 0, 100, 35, 5)
     target_spym = st.slider("SPYM (안정)", 0, 100, 35, 5)
     target_sgov = st.slider("SGOV (현금성)", 0, 100, 30, 5)
-    
     total_target = target_qqqm + target_spym + target_sgov
-    if total_target != 100:
-        st.error(f"합계: {total_target}% (100%가 아닙니다!)")
-    else:
-        st.success("합계: 100% (완벽합니다)")
+    if total_target != 100: st.error(f"합계: {total_target}% (100%가 아닙니다!)")
+    else: st.success("합계: 100% (완벽합니다)")
 
 st.sidebar.markdown("---")
 mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "🗑️ 데이터 관리"], horizontal=True)
@@ -331,7 +325,7 @@ total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * k
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
-# 🔥 [NEW] 탭 구성: 6개로 확장 (리밸런싱 추가)
+# 탭 구성 (6개)
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 자산 & 포트폴리오", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
@@ -368,37 +362,27 @@ with tab1:
             text2 = base2.mark_text(radius=140).encode(text=alt.Text("Percent"), order=alt.Order("가치", sort="descending"), color=alt.value("black"))
             st.altair_chart(pie2 + text2, use_container_width=True)
 
-# 🔥 [NEW] AI 리밸런싱 탭
+# 🔥 [NEW] AI 리밸런싱 탭 (지갑 잔고 연동)
 with tab2:
     st.header("⚖️ AI Portfolio Rebalancer")
     st.caption("사이드바에서 설정한 '목표 비율'에 맞춰 리밸런싱을 제안합니다.")
     
     if asset_details:
         rebal_df = pd.DataFrame(asset_details)
-        # 현재 비중 계산
         total_val = rebal_df['가치'].sum()
         rebal_df['Current_%'] = (rebal_df['가치'] / total_val * 100)
-        
-        # 목표 비중 매핑
-        targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0} # GMMF는 일단 0으로 둠
+        targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0}
         rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
-        
-        # 차이 계산
         rebal_df['Diff_%'] = rebal_df['Current_%'] - rebal_df['Target_%']
-        
-        # 조정 필요 금액 및 수량 계산
         rebal_df['Action_Value'] = total_val * (rebal_df['Target_%'] - rebal_df['Current_%']) / 100
         rebal_df['Action_Value_USD'] = rebal_df['Action_Value'] / krw_rate
         
-        # 현재가 가져오기 (실시간 계산)
         current_prices = {t: get_current_price(t) for t in rebal_df['종목']}
         rebal_df['Price_USD'] = rebal_df['종목'].map(current_prices)
-        
         rebal_df['Action_Qty'] = (rebal_df['Action_Value_USD'] / rebal_df['Price_USD']).round(1)
         
-        # 결과 출력
         for _, row in rebal_df.iterrows():
-            if row['Target_%'] == 0: continue # 목표 없는 종목 패스
+            if row['Target_%'] == 0: continue
             
             col_info, col_action = st.columns([2, 1])
             with col_info:
@@ -408,15 +392,20 @@ with tab2:
             
             with col_action:
                 if row['Action_Qty'] > 0.5:
-                    st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${row['Action_Value_USD']:.2f})")
+                    cost_usd = row['Action_Value_USD']
+                    # 🔥 [CHECK] 달러 잔고 확인 로직 추가
+                    if wallet_data['USD'] >= cost_usd:
+                        st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(자금 충분 ✅)")
+                    else:
+                        shortage = cost_usd - wallet_data['USD']
+                        st.warning(f"🟠 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(⚠️ ${shortage:.2f} 부족! 환전 필요)")
+                        
                 elif row['Action_Qty'] < -0.5:
                     st.error(f"🔴 **매도 추천**\n\n약 {abs(row['Action_Qty'])}주\n(${abs(row['Action_Value_USD']):.2f})")
                 else:
                     st.info("⚪ **유지 (Good)**\n\n리밸런싱 불필요")
             st.markdown("---")
-            
-    else:
-        st.info("보유 중인 주식이 없어 리밸런싱을 계산할 수 없습니다.")
+    else: st.info("보유 중인 주식이 없어 리밸런싱을 계산할 수 없습니다.")
 
 with tab3:
     st.header("📡 AI Market Radar")
@@ -428,21 +417,18 @@ with tab3:
         if vix_val > 30: st.error("😱 극도의 공포 (매수 기회!)")
         elif vix_val < 15: st.warning("😌 너무 평온함 (주의)")
         else: st.info("😐 보통 시장")
-    
     q_price, q_rsi, q_hist = get_market_analysis("QQQM")
     with col_qqqm:
         st.metric("QQQM RSI (14)", f"{q_rsi:.1f}")
         if q_rsi < 30: st.success("🟢 과매도 (Strong Buy)")
         elif q_rsi > 70: st.error("🔴 과매수 (Sell Warning)")
         else: st.info("⚪ 중립")
-
     s_price, s_rsi, s_hist = get_market_analysis("SPYM")
     with col_spym:
         st.metric("SPYM RSI (14)", f"{s_rsi:.1f}")
         if s_rsi < 30: st.success("🟢 과매도 (Buy)")
         elif s_rsi > 70: st.error("🔴 과매수 (Sell)")
         else: st.info("⚪ 중립")
-    
     if not q_hist.empty:
         q_hist = q_hist.reset_index()
         chart = alt.Chart(q_hist).mark_line().encode(x='Date', y='RSI', tooltip=['Date', 'RSI']).properties(height=300)
