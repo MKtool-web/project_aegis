@@ -47,15 +47,23 @@ def get_sheet_data():
         return pd.DataFrame(sheet.worksheet(sheet_name).get_all_records()), pd.DataFrame(sheet.worksheet("CashFlow").get_all_records())
     except: return pd.DataFrame(), pd.DataFrame()
 
-# 잔고 및 평단 계산
+# 🔥 [NEW] 잔고 계산 로직 (App과 동일하게 출금/역환전 반영)
 def calculate_balances(df_cash, df_stock):
     krw = 0; usd = 0
     if not df_cash.empty:
         df_cash['Amount_KRW'] = pd.to_numeric(df_cash['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         df_cash['Amount_USD'] = pd.to_numeric(df_cash['Amount_USD'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        
+        # 1. 입금/환전
         krw += df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
         krw -= df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
         usd += df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
+        
+        # 2. 역환전/출금 (봇도 이제 이 돈이 없다는 걸 암)
+        krw += df_cash[df_cash['Type'] == 'Exchange_USD_to_KRW']['Amount_KRW'].sum()
+        usd -= df_cash[df_cash['Type'] == 'Exchange_USD_to_KRW']['Amount_USD'].sum()
+        krw -= df_cash[df_cash['Type'] == 'Withdraw']['Amount_KRW'].sum()
+
     if not df_stock.empty:
         for col in ['Qty', 'Price', 'Fee']:
             df_stock[col] = pd.to_numeric(df_stock[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -65,10 +73,12 @@ def calculate_balances(df_cash, df_stock):
         usd += ((sells['Qty'] * sells['Price']) - sells['Fee']).sum()
         divs = df_stock[df_stock['Action'] == 'DIVIDEND']
         usd += (divs['Price'] - divs['Fee']).sum()
+        
     return krw, usd
 
 def calculate_my_avg_rate(df_cash):
     if df_cash.empty: return 1450.0
+    # 평단은 '매수' 기록 기준
     exchanges = df_cash[df_cash['Type'] == 'Exchange']
     if exchanges.empty: return 1450.0
     total_krw = pd.to_numeric(exchanges['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').sum()
