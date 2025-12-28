@@ -14,9 +14,10 @@ TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
 CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
-# 🔥 [설정] 봇 최소 반응 금액 (이월된 자금 포함, 이 정도는 있어야 봇이 움직임)
-MIN_KRW_ACTION = 300000  # 원화 30만원 이상일 때 환전 조언
-MIN_USD_ACTION = 300     # 달러 $300 이상일 때 매수 조언
+# 🔥 [설정] 봇 행동 기준 (수정됨)
+MIN_KRW_ACTION = 10000   # 원화 1만원만 있어도 환전 기회 포착
+MIN_USD_ACTION = 100     # 달러 $100 이상일 때 매수 조언
+REVERSE_EX_GAP = 15      # 평단보다 15원 이상 비쌀 때 역환전 고려
 
 def send_telegram(message):
     try:
@@ -47,19 +48,18 @@ def get_sheet_data():
         return pd.DataFrame(sheet.worksheet(sheet_name).get_all_records()), pd.DataFrame(sheet.worksheet("CashFlow").get_all_records())
     except: return pd.DataFrame(), pd.DataFrame()
 
-# 🔥 [NEW] 잔고 계산 로직 (App과 동일하게 출금/역환전 반영)
+# 잔고 및 평단 계산 (역환전/출금 반영)
 def calculate_balances(df_cash, df_stock):
     krw = 0; usd = 0
     if not df_cash.empty:
         df_cash['Amount_KRW'] = pd.to_numeric(df_cash['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         df_cash['Amount_USD'] = pd.to_numeric(df_cash['Amount_USD'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         
-        # 1. 입금/환전
         krw += df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
         krw -= df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
         usd += df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
         
-        # 2. 역환전/출금 (봇도 이제 이 돈이 없다는 걸 암)
+        # 역환전 및 출금 반영
         krw += df_cash[df_cash['Type'] == 'Exchange_USD_to_KRW']['Amount_KRW'].sum()
         usd -= df_cash[df_cash['Type'] == 'Exchange_USD_to_KRW']['Amount_USD'].sum()
         krw -= df_cash[df_cash['Type'] == 'Withdraw']['Amount_KRW'].sum()
@@ -73,16 +73,14 @@ def calculate_balances(df_cash, df_stock):
         usd += ((sells['Qty'] * sells['Price']) - sells['Fee']).sum()
         divs = df_stock[df_stock['Action'] == 'DIVIDEND']
         usd += (divs['Price'] - divs['Fee']).sum()
-        
     return krw, usd
 
-def calculate_my_avg_rate(df_cash):
+def calculate_my_avg_exchange_rate(df_cash):
     if df_cash.empty: return 1450.0
-    # 평단은 '매수' 기록 기준
-    exchanges = df_cash[df_cash['Type'] == 'Exchange']
-    if exchanges.empty: return 1450.0
-    total_krw = pd.to_numeric(exchanges['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').sum()
-    total_usd = pd.to_numeric(exchanges['Amount_USD'].astype(str).str.replace(',', ''), errors='coerce').sum()
+    buys = df_cash[df_cash['Type'] == 'Exchange']
+    if buys.empty: return 1450.0
+    total_krw = pd.to_numeric(buys['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').sum()
+    total_usd = pd.to_numeric(buys['Amount_USD'].astype(str).str.replace(',', ''), errors='coerce').sum()
     return total_krw / total_usd if total_usd else 1450.0
 
 def analyze_market(ticker):
@@ -104,21 +102,22 @@ def run_bot():
         curr_rate = yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1]
     except: return
 
-    # 자산 상태 (이월 자금 포함된 실제 잔고)
-    my_avg_rate = calculate_my_avg_rate(df_cash)
+    # 자산 상태
+    my_avg_rate = calculate_my_avg_exchange_rate(df_cash)
     my_krw, my_usd = calculate_balances(df_cash, df_stock)
     rate_diff = curr_rate - my_avg_rate
     
     msg = f"📡 **[Aegis Smart Strategy]**\n"
     msg += f"📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n"
-    msg += f"💰 보유 총알: ￦{int(my_krw):,} / ${my_usd:.2f}\n\n"
+    msg += f"💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n"
+    msg += f"📊 지표: VIX {vix:.1f} / RSI {qqqm_rsi:.1f}\n\n"
 
     should_send = False
 
     # ============================================
-    # 🧠 전략 1. 스마트 분할 환전 (Smart Split)
+    # 🧠 전략 1. 환전 (KRW -> USD)
     # ============================================
-    # "이번 달 예산"이 아니라 "현재 내 원화 잔고(my_krw)"를 기준으로 판단함 (이월 자금 해결!)
+    # 1만원이라도 있으면 환전 기회 봄
     if my_krw >= MIN_KRW_ACTION: 
         suggest_percent = 0
         strategy_msg = ""
@@ -126,42 +125,52 @@ def run_bot():
         # 1단계: 조금 저렴 (-5원 ~ -15원) -> 30% 환전
         if -15 < rate_diff <= -5:
             suggest_percent = 30
-            strategy_msg = "📉 환율이 소폭 하락했습니다. 보유 원화의 30%만 분할 환전하세요."
-        
+            strategy_msg = "📉 환율 소폭 하락. 잔고의 30% 분할 환전."
         # 2단계: 많이 저렴 (-15원 ~ -30원) -> 50% 환전
         elif -30 < rate_diff <= -15:
             suggest_percent = 50
-            strategy_msg = "📉📉 환율이 매력적입니다! 보유 원화의 절반(50%)을 확보하세요."
-            
+            strategy_msg = "📉📉 환율 매력적! 잔고의 50% 확보."
         # 3단계: 대폭락 (-30원 이상) -> 100% 환전
         elif rate_diff <= -30:
             suggest_percent = 100
-            strategy_msg = "💎 **[바겐세일]** 역대급 기회입니다. 원화를 모두 달러로 바꾸세요!"
+            strategy_msg = "💎 **[바겐세일]** 역대급 환율입니다. 전액 환전!"
             
         if suggest_percent > 0:
             amount_to_exchange = my_krw * (suggest_percent / 100)
             msg += f"💵 **[환전 추천]** (현재 {curr_rate:,.0f}원)\n"
             msg += f"{strategy_msg}\n"
-            msg += f"👉 **추천 금액: {int(amount_to_exchange):,}원**\n\n"
+            msg += f"👉 추천: {int(amount_to_exchange):,}원\n\n"
             should_send = True
 
     # ============================================
-    # 🧠 전략 2. 스마트 매매 (Buy & Sell)
+    # 🧠 전략 2. 역환전 (USD -> KRW, 환차익 실현)
     # ============================================
-    # 매수 로직 (달러 있을 때)
+    # 조건: 
+    # 1. 환율이 내 평단보다 15원 이상 비쌈 (수수료 떼고도 남음)
+    # 2. 주식이 살 타이밍이 아님 (RSI가 55 이상, 즉 저평가 아님)
+    # 3. 달러가 어느 정도 있음 ($100 이상)
+    is_stock_cheap = (qqqm_rsi < 50 or vix > 25) # 주식이 싼가?
+    
+    if my_usd >= 100 and rate_diff >= REVERSE_EX_GAP and not is_stock_cheap:
+        msg += f"🇰🇷 **[역환전 기회]** (환차익 실현)\n"
+        msg += f"• 현재 환율이 평단보다 {rate_diff:+.0f}원 높습니다.\n"
+        msg += f"• 주식 시장도 매수 타이밍이 아닙니다.\n"
+        msg += f"👉 달러 일부를 원화로 바꿔두세요.\n\n"
+        should_send = True
+
+    # ============================================
+    # 🧠 전략 3. 주식 매매 (Buy & Sell)
+    # ============================================
     if my_usd >= MIN_USD_ACTION and (is_open or vix > 30):
         if 30 <= qqqm_rsi < 40:
-            msg += "📈 **[매수 추천]** QQQM 조정장 진입. 달러의 30% 매수.\n"
+            msg += "📈 **[매수 추천]** 조정장 진입. 달러의 30% 매수.\n"
             should_send = True
         elif qqqm_rsi < 30:
-            msg += "😱 **[공포 매수]** 과매도 구간입니다. 달러의 50% 과감하게 매수!\n"
+            msg += "😱 **[공포 매수]** 과매도 구간. 달러의 50% 과감하게 매수!\n"
             should_send = True
     
-    # 🔥 [NEW] 매도(수익 실현) 로직 추가 (별개로 작동)
-    # 주식을 보유하고 있을 때만 작동해야 하지만, 단순화를 위해 RSI 기준으로 조언
     if qqqm_rsi > 70 and is_open:
-        msg += "🔴 **[매도 경고]** QQQM이 과열되었습니다 (RSI > 70).\n"
-        msg += "👉 수익 실현(리밸런싱)을 고려하거나, 추가 매수를 멈추세요.\n"
+        msg += "🔴 **[매도 경고]** 과열 (RSI > 70). 수익 실현 고려.\n"
         should_send = True
 
     if should_send:
