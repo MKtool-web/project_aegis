@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V23.0 (Full Cycle)", layout="wide")
+st.set_page_config(page_title="Project Aegis V23.1 (UI Improved)", layout="wide")
 
 # 🔒 로그인 시스템
 def check_password():
@@ -80,7 +80,7 @@ def get_ai_target_ratios(vix, q_rsi, s_rsi):
         mode = "Greed (Profit Take)"; t_qqqm = 25; t_spym = 25; t_sgov = 50
     return t_qqqm, t_spym, t_sgov, mode
 
-# 🔥 [UPDATE] 자산 계산 로직 (역환전/출금 반영)
+# 자산 계산 로직
 def calculate_wallet_balance_detail(df_stock, df_cash):
     krw_deposit = 0; krw_withdrawn = 0; krw_used_for_usd = 0; krw_gained_from_usd = 0
     usd_gained = 0; usd_sold = 0
@@ -89,15 +89,11 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
         for col in ['Amount_KRW', 'Amount_USD']:
             if col in df_cash.columns: df_cash[col] = pd.to_numeric(df_cash[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
             
-        # 1. 입금
         krw_deposit = df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
-        # 2. 출금 (Withdraw)
         krw_withdrawn = df_cash[df_cash['Type'] == 'Withdraw']['Amount_KRW'].sum()
-        # 3. 환전 (KRW -> USD)
         ex_to_usd = df_cash[df_cash['Type'] == 'Exchange']
         krw_used_for_usd = ex_to_usd['Amount_KRW'].sum()
         usd_gained = ex_to_usd['Amount_USD'].sum()
-        # 4. 역환전 (USD -> KRW)
         ex_to_krw = df_cash[df_cash['Type'] == 'Exchange_USD_to_KRW']
         krw_gained_from_usd = ex_to_krw['Amount_KRW'].sum()
         usd_sold = ex_to_krw['Amount_USD'].sum()
@@ -122,17 +118,14 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
             usd_earned_stock += revenue
             stock_details.append(f"[+] 배당 {row['Ticker']}: ${revenue:.2f}")
 
-    # 최종 잔고 계산
     final_krw = (krw_deposit + krw_gained_from_usd) - (krw_used_for_usd + krw_withdrawn)
     final_usd = (usd_gained + usd_earned_stock) - (usd_spent + usd_sold)
-    
-    # 순수 투자 원금 (총 입금 - 총 출금)
     net_principal = krw_deposit - krw_withdrawn
 
     return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
 
-# 🔥 [NEW] 내 평균 환전가 계산 (매수 기준)
+# 내 평균 환전가 계산
 def calculate_my_avg_exchange_rate(df_cash):
     if df_cash.empty: return 0
     buys = df_cash[df_cash['Type'] == 'Exchange']
@@ -249,7 +242,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V23.0 (Full Cycle)")
+st.title("🛡️ Project Aegis V23.1 (UI Improved)")
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
@@ -311,7 +304,6 @@ with st.sidebar.expander("🎯 포트폴리오 목표 설정", expanded=True):
     else: st.success("합계: 100%")
 
 st.sidebar.markdown("---")
-# 🔥 [NEW] 메뉴 구조 변경
 mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "역환전/출금", "🗑️ 데이터 관리"], horizontal=True)
 
 if mode == "입금/환전":
@@ -337,7 +329,6 @@ if mode == "입금/환전":
                 else: st.error("❌ 잔고 부족!")
             time.sleep(1); st.rerun()
 
-# 🔥 [NEW] 역환전 및 출금 섹션
 elif mode == "역환전/출금":
     st.sidebar.subheader("📤 자금 회수 (Exit)")
     act_type = st.sidebar.selectbox("종류", ["역환전 (달러→원화)", "출금 (내 통장으로)"])
@@ -353,27 +344,22 @@ elif mode == "역환전/출금":
     
     with st.sidebar.form("exit_form"):
         date = st.date_input("날짜", datetime.today())
-        
         if act_type == "역환전 (달러→원화)":
             usd_amount = st.number_input("매도할 달러($)", step=10.0)
             ex_rate_out = st.number_input("적용 환율", value=krw_rate, format="%.2f")
             if ex_rate_out > 0: st.caption(f"🇰🇷 예상 입금: {int(usd_amount * ex_rate_out):,}원")
-            
             if st.form_submit_button("실행"):
                 if wallet_data['USD'] >= usd_amount:
                     krw_out = usd_amount * ex_rate_out
                     log_cash_flow(date, "Exchange_USD_to_KRW", krw_out, usd_amount, ex_rate_out)
-                    st.success("✅ 역환전 완료!")
-                    time.sleep(1); st.rerun()
+                    st.success("✅ 역환전 완료!"); time.sleep(1); st.rerun()
                 else: st.error("❌ 달러 잔고 부족")
-                
         else: # 출금
             krw_amount = st.number_input("출금할 원화(KRW)", step=10000)
             if st.form_submit_button("실행"):
                 if wallet_data['KRW'] >= krw_amount:
                     log_cash_flow(date, "Withdraw", krw_amount, 0, 0)
-                    st.success("💸 출금 기록 완료 (순수 투자원금 차감)")
-                    time.sleep(1); st.rerun()
+                    st.success("💸 출금 기록 완료"); time.sleep(1); st.rerun()
                 else: st.error("❌ 원화 잔고 부족")
 
 elif mode == "주식 거래":
@@ -432,28 +418,43 @@ if not df_stock.empty and 'Action' in df_stock.columns:
             total_stock_val_krw += val_krw
             asset_details.append({"종목": t, "가치": val_krw, "수량": q})
 
-# 🔥 [UPDATE] 순수 투자 원금 적용
 total_deposit = wallet_data['Net_Principal']
 total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * krw_rate)
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
+# 탭 구성
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💰 총 자산", f"{int(total_asset):,}원")
-    col2.metric("📊 주식 평가액", f"{int(total_stock_val_krw):,}원")
-    col3.metric("📈 예상 수익", f"{int(net_profit):+,.0f}원", f"{profit_rate:.2f}%")
-    col4.metric("💳 순수 투자원금", f"{int(total_deposit):,}원", help="총 입금액 - 총 출금액")
+    # 🔥 [NEW] 메인 지표 UI 개선 (2단 구성)
+    st.subheader("💰 자산 현황")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("총 자산 (주식+현금)", f"{int(total_asset):,}원", help="주식 평가액 + 원화 잔고 + (달러 잔고 × 환율)")
+    col2.metric("순수 투자원금", f"{int(total_deposit):,}원", help="총 입금액 - 총 출금액")
+    col3.metric("총 수익", f"{int(net_profit):+,.0f}원", f"{profit_rate:.2f}%")
     
     st.markdown("---")
-    with st.expander("🔍 잔고 상세"):
+    st.subheader("💵 환율 및 주식")
+    c1, c2 = st.columns(2)
+    
+    # 환율 정보 (내 평단 비교 표시)
+    if my_avg_exchange > 0:
+        ex_diff = krw_rate - my_avg_exchange
+        ex_pct = (ex_diff / my_avg_exchange) * 100
+        c1.metric("현재 환율 (vs 내 평단)", f"{krw_rate:,.0f}원", f"{ex_diff:+.0f}원 ({ex_pct:.2f}%)")
+    else:
+        c1.metric("현재 환율", f"{krw_rate:,.0f}원")
+        
+    c2.metric("보유 주식 평가액", f"{int(total_stock_val_krw):,}원")
+    
+    st.markdown("---")
+    with st.expander("🔍 잔고 상세 보기"):
         st.write(f"• 🇰🇷 원화 잔고: {int(wallet_data['KRW']):,}원")
         st.write(f"• 🇺🇸 달러 잔고: ${wallet_data['USD']:.2f}")
 
-    c1, c2 = st.columns(2)
-    with c1:
+    c_pie1, c_pie2 = st.columns(2)
+    with c_pie1:
         st.subheader("🍩 자산 구성")
         if total_asset > 0:
             asset_df = pd.DataFrame([{"Type": "주식", "Value": total_stock_val_krw}, {"Type": "현금(KRW)", "Value": wallet_data['KRW']}, {"Type": "현금(USD)", "Value": wallet_data['USD'] * krw_rate}])
@@ -462,7 +463,7 @@ with tab1:
             pie = base.mark_arc(outerRadius=120, innerRadius=60).encode(color=alt.Color("Type"), order=alt.Order("Value", sort="descending"), tooltip=["Type", "Value", "Percent"])
             text = base.mark_text(radius=140).encode(text=alt.Text("Percent"), order=alt.Order("Value", sort="descending"), color=alt.value("black"))
             st.altair_chart(pie + text, use_container_width=True)
-    with c2:
+    with c_pie2:
         st.subheader("🥧 종목 비중")
         if asset_details:
             stock_df = pd.DataFrame(asset_details)
