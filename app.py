@@ -11,34 +11,23 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V18.0 (Final Complete)", layout="wide")
+st.set_page_config(page_title="Project Aegis V23.0 (Full Cycle)", layout="wide")
 
-# 🔒 로그인 시스템 (안전장치 포함)
+# 🔒 로그인 시스템
 def check_password():
-    # 세션 상태 초기화
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-
-    # 비밀번호 설정 여부 확인
+    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
     if "APP_PASSWORD" not in st.secrets:
-        st.warning("⚠️ 'secrets.toml'에 'APP_PASSWORD'가 설정되지 않았습니다. 누구나 접속 가능합니다.")
-        return # 비밀번호 없으면 통과
-
-    # 인증되지 않은 경우 로그인 화면 표시
+        st.warning("⚠️ 'secrets.toml'에 'APP_PASSWORD'가 설정되지 않았습니다."); return
     if not st.session_state["authenticated"]:
         st.title("🔒 Project Aegis")
         user_input = st.text_input("🔑 접속 암호를 입력하세요:", type="password")
         if st.button("로그인"):
             if user_input == st.secrets["APP_PASSWORD"]:
-                st.session_state["authenticated"] = True
-                st.rerun() # 성공 시 새로고침
-            else:
-                st.error("암호가 틀렸습니다.")
-        st.stop() # 암호 맞을 때까지 여기서 코드 실행 중단
+                st.session_state["authenticated"] = True; st.rerun()
+            else: st.error("암호가 틀렸습니다.")
+        st.stop()
 
-check_password() # 보안 검문소 실행
-
-# 구글 시트 연결
+check_password()
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
@@ -49,8 +38,7 @@ def send_test_message():
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         requests.post(url, data={"chat_id": chat_id, "text": "🔔 [Aegis] 정상 작동 중입니다."})
         st.sidebar.success("✅ 전송 성공!")
-    except:
-        st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
+    except: st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
 # 1. 데이터 엔진 & AI 분석
@@ -65,8 +53,7 @@ def get_current_price(ticker):
 
 @st.cache_data(ttl=300)
 def get_usd_krw():
-    try:
-        return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
+    try: return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
     except: return 1450.0
 
 @st.cache_data(ttl=300)
@@ -85,30 +72,37 @@ def get_vix_data():
         return df['Close'].iloc[-1], df
     except: return 0, pd.DataFrame()
 
-# AI 오토파일럿 로직
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
-    mode = "Normal"
-    t_qqqm = 35; t_spym = 35; t_sgov = 30
-    
+    mode = "Normal"; t_qqqm = 35; t_spym = 35; t_sgov = 30
     if vix > 30 or q_rsi < 30 or s_rsi < 30:
-        mode = "Fear (Aggressive Buy)"
-        t_qqqm = 45; t_spym = 45; t_sgov = 10
+        mode = "Fear (Aggressive Buy)"; t_qqqm = 45; t_spym = 45; t_sgov = 10
     elif q_rsi > 70 or s_rsi > 70:
-        mode = "Greed (Profit Take)"
-        t_qqqm = 25; t_spym = 25; t_sgov = 50
-        
+        mode = "Greed (Profit Take)"; t_qqqm = 25; t_spym = 25; t_sgov = 50
     return t_qqqm, t_spym, t_sgov, mode
 
+# 🔥 [UPDATE] 자산 계산 로직 (역환전/출금 반영)
 def calculate_wallet_balance_detail(df_stock, df_cash):
-    krw_deposit = 0; krw_used = 0; usd_gained = 0
+    krw_deposit = 0; krw_withdrawn = 0; krw_used_for_usd = 0; krw_gained_from_usd = 0
+    usd_gained = 0; usd_sold = 0
+    
     if not df_cash.empty:
         for col in ['Amount_KRW', 'Amount_USD']:
             if col in df_cash.columns: df_cash[col] = pd.to_numeric(df_cash[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
+            
+        # 1. 입금
         krw_deposit = df_cash[df_cash['Type'] == 'Deposit']['Amount_KRW'].sum()
-        krw_used = df_cash[df_cash['Type'] == 'Exchange']['Amount_KRW'].sum()
-        usd_gained = df_cash[df_cash['Type'] == 'Exchange']['Amount_USD'].sum()
+        # 2. 출금 (Withdraw)
+        krw_withdrawn = df_cash[df_cash['Type'] == 'Withdraw']['Amount_KRW'].sum()
+        # 3. 환전 (KRW -> USD)
+        ex_to_usd = df_cash[df_cash['Type'] == 'Exchange']
+        krw_used_for_usd = ex_to_usd['Amount_KRW'].sum()
+        usd_gained = ex_to_usd['Amount_USD'].sum()
+        # 4. 역환전 (USD -> KRW)
+        ex_to_krw = df_cash[df_cash['Type'] == 'Exchange_USD_to_KRW']
+        krw_gained_from_usd = ex_to_krw['Amount_KRW'].sum()
+        usd_sold = ex_to_krw['Amount_USD'].sum()
 
-    usd_spent = 0; usd_earned = 0; stock_details = []
+    usd_spent = 0; usd_earned_stock = 0; stock_details = []
     if not df_stock.empty:
         for col in ['Qty', 'Price', 'Fee']:
             if col in df_stock.columns: df_stock[col] = pd.to_numeric(df_stock[col].astype(str).str.replace(',',''), errors='coerce').fillna(0)
@@ -120,16 +114,33 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
         sells = df_stock[df_stock['Action'] == 'SELL']
         for _, row in sells.iterrows():
             revenue = (row['Qty'] * row['Price']) - row['Fee']
-            usd_earned += revenue
+            usd_earned_stock += revenue
             stock_details.append(f"[+] 매도 {row['Ticker']}: ${revenue:.2f}")
         divs = df_stock[df_stock['Action'] == 'DIVIDEND']
         for _, row in divs.iterrows():
             revenue = row['Price'] - row['Fee']
-            usd_earned += revenue
+            usd_earned_stock += revenue
             stock_details.append(f"[+] 배당 {row['Ticker']}: ${revenue:.2f}")
 
-    return {'KRW': krw_deposit - krw_used, 'USD': usd_gained - usd_spent + usd_earned, 
-            'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Detail_USD_Earned': usd_earned, 'Stock_Log': stock_details}
+    # 최종 잔고 계산
+    final_krw = (krw_deposit + krw_gained_from_usd) - (krw_used_for_usd + krw_withdrawn)
+    final_usd = (usd_gained + usd_earned_stock) - (usd_spent + usd_sold)
+    
+    # 순수 투자 원금 (총 입금 - 총 출금)
+    net_principal = krw_deposit - krw_withdrawn
+
+    return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
+            'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
+
+# 🔥 [NEW] 내 평균 환전가 계산 (매수 기준)
+def calculate_my_avg_exchange_rate(df_cash):
+    if df_cash.empty: return 0
+    buys = df_cash[df_cash['Type'] == 'Exchange']
+    if buys.empty: return 0
+    total_krw = pd.to_numeric(buys['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').sum()
+    total_usd = pd.to_numeric(buys['Amount_USD'].astype(str).str.replace(',', ''), errors='coerce').sum()
+    if total_usd == 0: return 0
+    return total_krw / total_usd
 
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
@@ -221,7 +232,9 @@ def calculate_history(df_stock, df_cash):
             day_cash = df_c[df_c['Date'] == d]
             for _, row in day_cash.iterrows():
                 if row['Type'] == 'Deposit': cum_cash_krw += row['Amount_KRW']; cum_invested_krw += row['Amount_KRW']
+                elif row['Type'] == 'Withdraw': cum_cash_krw -= row['Amount_KRW']; cum_invested_krw -= row['Amount_KRW']
                 elif row['Type'] == 'Exchange': cum_cash_krw -= row['Amount_KRW']; cum_cash_usd += row['Amount_USD']
+                elif row['Type'] == 'Exchange_USD_to_KRW': cum_cash_krw += row['Amount_KRW']; cum_cash_usd -= row['Amount_USD']
         if not df_s.empty:
             day_stock = df_s[df_s['Date'] == d]
             for _, row in day_stock.iterrows():
@@ -236,9 +249,8 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V18.0 (Final Complete)")
+st.title("🛡️ Project Aegis V23.0 (Full Cycle)")
 
-# 데이터 로딩
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
 except: sheet_name = "시트1"
@@ -265,8 +277,8 @@ wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
 monthly_div, total_div_all = calculate_dividend_analytics(df_stock)
+my_avg_exchange = calculate_my_avg_exchange_rate(df_cash)
 
-# AI 분석 데이터
 vix_val, vix_hist = get_vix_data()
 q_price, q_rsi, q_hist = get_market_analysis("QQQM")
 s_price, s_rsi, s_hist = get_market_analysis("SPYM")
@@ -299,7 +311,8 @@ with st.sidebar.expander("🎯 포트폴리오 목표 설정", expanded=True):
     else: st.success("합계: 100%")
 
 st.sidebar.markdown("---")
-mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "🗑️ 데이터 관리"], horizontal=True)
+# 🔥 [NEW] 메뉴 구조 변경
+mode = st.sidebar.radio("작업 선택", ["주식 거래", "입금/환전", "역환전/출금", "🗑️ 데이터 관리"], horizontal=True)
 
 if mode == "입금/환전":
     st.sidebar.subheader("💱 입금 및 환전")
@@ -322,8 +335,46 @@ if mode == "입금/환전":
                     log_cash_flow(date, "Exchange", amount_krw, usd_out, ex_rate_in)
                     st.success("💱 환전 완료!")
                 else: st.error("❌ 잔고 부족!")
-            time.sleep(1)
-            st.rerun()
+            time.sleep(1); st.rerun()
+
+# 🔥 [NEW] 역환전 및 출금 섹션
+elif mode == "역환전/출금":
+    st.sidebar.subheader("📤 자금 회수 (Exit)")
+    act_type = st.sidebar.selectbox("종류", ["역환전 (달러→원화)", "출금 (내 통장으로)"])
+    
+    # 환차익 UI (역환전 시)
+    if act_type == "역환전 (달러→원화)":
+        if my_avg_exchange > 0:
+            diff = krw_rate - my_avg_exchange
+            pct = (diff / my_avg_exchange) * 100
+            st.sidebar.metric("💵 환차익 예상", f"{krw_rate:,.0f}원", f"{diff:+.0f}원 ({pct:+.2f}%)", delta_color="normal")
+            if diff > 0: st.sidebar.caption("✅ 지금 바꾸면 환전 이득입니다!")
+            else: st.sidebar.caption("⚠️ 지금 바꾸면 환전 손해입니다.")
+    
+    with st.sidebar.form("exit_form"):
+        date = st.date_input("날짜", datetime.today())
+        
+        if act_type == "역환전 (달러→원화)":
+            usd_amount = st.number_input("매도할 달러($)", step=10.0)
+            ex_rate_out = st.number_input("적용 환율", value=krw_rate, format="%.2f")
+            if ex_rate_out > 0: st.caption(f"🇰🇷 예상 입금: {int(usd_amount * ex_rate_out):,}원")
+            
+            if st.form_submit_button("실행"):
+                if wallet_data['USD'] >= usd_amount:
+                    krw_out = usd_amount * ex_rate_out
+                    log_cash_flow(date, "Exchange_USD_to_KRW", krw_out, usd_amount, ex_rate_out)
+                    st.success("✅ 역환전 완료!")
+                    time.sleep(1); st.rerun()
+                else: st.error("❌ 달러 잔고 부족")
+                
+        else: # 출금
+            krw_amount = st.number_input("출금할 원화(KRW)", step=10000)
+            if st.form_submit_button("실행"):
+                if wallet_data['KRW'] >= krw_amount:
+                    log_cash_flow(date, "Withdraw", krw_amount, 0, 0)
+                    st.success("💸 출금 기록 완료 (순수 투자원금 차감)")
+                    time.sleep(1); st.rerun()
+                else: st.error("❌ 원화 잔고 부족")
 
 elif mode == "주식 거래":
     st.sidebar.subheader("📈 주식 매매 & 배당")
@@ -381,33 +432,25 @@ if not df_stock.empty and 'Action' in df_stock.columns:
             total_stock_val_krw += val_krw
             asset_details.append({"종목": t, "가치": val_krw, "수량": q})
 
-total_deposit = 0
-if not df_cash.empty and 'Type' in df_cash.columns:
-    df_cash['Amount_KRW'] = pd.to_numeric(df_cash['Amount_KRW'], errors='coerce').fillna(0)
-    total_deposit = df_cash[df_cash['Type']=='Deposit']['Amount_KRW'].sum()
-
+# 🔥 [UPDATE] 순수 투자 원금 적용
+total_deposit = wallet_data['Net_Principal']
 total_asset = total_stock_val_krw + wallet_data['KRW'] + (wallet_data['USD'] * krw_rate)
 net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
-# 탭 구성
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
-    # 메인 지표 4개
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💰 총 자산 (주식+현금)", f"{int(total_asset):,}원")
-    col2.metric("📊 순수 주식 평가액", f"{int(total_stock_val_krw):,}원")
+    col1.metric("💰 총 자산", f"{int(total_asset):,}원")
+    col2.metric("📊 주식 평가액", f"{int(total_stock_val_krw):,}원")
     col3.metric("📈 예상 수익", f"{int(net_profit):+,.0f}원", f"{profit_rate:.2f}%")
-    col4.metric("💳 총 투자원금", f"{int(total_deposit):,}원")
+    col4.metric("💳 순수 투자원금", f"{int(total_deposit):,}원", help="총 입금액 - 총 출금액")
     
     st.markdown("---")
-    
-    with st.expander("🔍 잔고 계산 내역 상세"):
-        st.write(f"1. 총 환전 입금: ${wallet_data['Detail_USD_In']:.2f}")
-        st.write(f"2. 주식 매수 총액: ${wallet_data['Detail_USD_Out']:.2f}")
-        st.write(f"3. 수익: ${wallet_data['Detail_USD_Earned']:.2f}")
-        st.write(f"= 최종 잔고: ${wallet_data['USD']:.2f}")
+    with st.expander("🔍 잔고 상세"):
+        st.write(f"• 🇰🇷 원화 잔고: {int(wallet_data['KRW']):,}원")
+        st.write(f"• 🇺🇸 달러 잔고: ${wallet_data['USD']:.2f}")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -431,22 +474,14 @@ with tab1:
 
 with tab2:
     st.header("💰 Dividend Snowball Effect")
-    st.caption("배당금 재투자(Snowball)를 통해 복리 효과를 누리세요.")
-    
     d1, d2, d3 = st.columns(3)
     d1.metric("총 수령 배당금", f"${total_div_all:.2f}")
     drip_shares = total_div_all / gov_price if gov_price > 0 else 0
     d2.metric("SGOV 환산 (재투자)", f"{drip_shares:.2f}주", help="받은 배당금으로 살 수 있는 SGOV 주식 수")
     d3.metric("현재 SGOV 가격", f"${gov_price:.2f}")
-    
     st.markdown("---")
-    
     with st.expander("ℹ️ 내 종목 배당 주기 확인하기 (클릭)", expanded=True):
-        st.markdown("""
-        * **📅 월배당 (매달):** `SGOV`, `GMMF` (매월 초 입금)
-        * **🍂 분기배당 (3,6,9,12월):** `QQQM`, `SPYM` (분기 말 입금)
-        """)
-
+        st.markdown("* **📅 월배당 (매달):** `SGOV`, `GMMF`\n* **🍂 분기배당 (3,6,9,12월):** `QQQM`, `SPYM`")
     col_chart, col_log = st.columns([2, 1])
     with col_chart:
         st.subheader("📊 월별 배당금 추이")
@@ -454,19 +489,16 @@ with tab2:
             bar = alt.Chart(monthly_div).mark_bar().encode(x=alt.X('Month', title='월'), y=alt.Y('Net_Dividend', title='배당금 ($)'), tooltip=['Month', 'Net_Dividend'])
             st.altair_chart(bar, use_container_width=True)
         else: st.info("배당 기록 없음")
-            
     with col_log:
         st.subheader("📝 최근 배당 기록")
         div_logs = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
-        if not div_logs.empty:
-            st.dataframe(div_logs[['Date', 'Ticker', 'Price']].rename(columns={'Price': '세전($)'}), hide_index=True)
+        if not div_logs.empty: st.dataframe(div_logs[['Date', 'Ticker', 'Price']].rename(columns={'Price': '세전($)'}), hide_index=True)
         else: st.caption("기록 없음")
 
 with tab3:
     st.header("⚖️ AI Portfolio Rebalancer")
     if use_autopilot: st.info(f"🧠 **AI 오토파일럿 작동 중: [{ai_mode}]**")
     else: st.caption("수동 목표 비율 설정 모드")
-    
     if asset_details:
         rebal_df = pd.DataFrame(asset_details)
         total_val = rebal_df['가치'].sum()
@@ -479,7 +511,6 @@ with tab3:
         current_prices = {t: get_current_price(t) for t in rebal_df['종목']}
         rebal_df['Price_USD'] = rebal_df['종목'].map(current_prices)
         rebal_df['Action_Qty'] = (rebal_df['Action_Value_USD'] / rebal_df['Price_USD']).round(1)
-        
         for _, row in rebal_df.iterrows():
             if row['Target_%'] == 0: continue
             c_i, c_a = st.columns([2, 1])
@@ -490,12 +521,12 @@ with tab3:
             with c_a:
                 if row['Action_Qty'] > 0.5:
                     cost_usd = row['Action_Value_USD']
-                    if wallet_data['USD'] >= cost_usd: st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(자금 충분 ✅)")
-                    else: shortage = cost_usd - wallet_data['USD']; st.warning(f"🟠 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})\n(⚠️ ${shortage:.2f} 부족)")
-                elif row['Action_Qty'] < -0.5: st.error(f"🔴 **매도 추천**\n\n약 {abs(row['Action_Qty'])}주\n(${abs(row['Action_Value_USD']):.2f})")
+                    if wallet_data['USD'] >= cost_usd: st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})")
+                    else: st.warning(f"🟠 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f}) (부족)")
+                elif row['Action_Qty'] < -0.5: st.error(f"🔴 **매도 추천**\n\n약 {abs(row['Action_Qty'])}주")
                 else: st.info("⚪ **유지 (Good)**")
             st.markdown("---")
-    else: st.info("리밸런싱 데이터 부족")
+    else: st.info("데이터 부족")
 
 with tab4:
     st.header("📡 AI Market Radar")
@@ -503,36 +534,24 @@ with tab4:
     vix_delta = vix_val - vix_hist['Close'].iloc[-2] if len(vix_hist) > 1 else 0
     with col_vix:
         st.metric("VIX (공포지수)", f"{vix_val:.2f}", f"{vix_delta:.2f}", delta_color="inverse")
-        if vix_val > 30: st.error("😱 공포 (매수 기회)")
-        elif vix_val < 15: st.warning("😌 탐욕 (주의)")
-        else: st.info("😐 보통")
     with col_qqqm:
         st.metric("QQQM RSI", f"{q_rsi:.1f}")
-        if q_rsi < 30: st.success("🟢 과매도")
-        elif q_rsi > 70: st.error("🔴 과매수")
-        else: st.info("⚪ 중립")
     with col_spym:
         st.metric("SPYM RSI", f"{s_rsi:.1f}")
-        if s_rsi < 30: st.success("🟢 과매도")
-        elif s_rsi > 70: st.error("🔴 과매수")
-        else: st.info("⚪ 중립")
     if not q_hist.empty:
         q_hist = q_hist.reset_index()
         chart = alt.Chart(q_hist).mark_line().encode(x='Date', y='RSI', tooltip=['Date', 'RSI']).properties(height=300)
         st.altair_chart(chart, use_container_width=True)
 
 with tab5:
-    st.header("👮‍♂️ 2025년 세금 지킴이 (Tax Guard)")
+    st.header("👮‍♂️ 2025년 세금 지킴이")
     t1, t2, t3 = st.columns(3)
-    t1.metric("올해 실현 수익", f"{int(tax_info['realized_profit']):,}원")
-    t2.metric("남은 비과세 한도", f"{int(tax_info['remaining_allowance']):,}원", delta_color="normal" if tax_info['remaining_allowance'] > 0 else "inverse")
-    t3.metric("예상 세금 (22%)", f"{int(tax_info['tax_estimated']):,}원")
-    progress = min(1.0, max(0.0, tax_info['realized_profit'] / 2500000))
-    st.write(f"📊 **한도 소진율: {progress*100:.1f}%**")
-    st.progress(progress)
+    t1.metric("실현 수익", f"{int(tax_info['realized_profit']):,}원")
+    t2.metric("남은 비과세", f"{int(tax_info['remaining_allowance']):,}원")
+    t3.metric("예상 세금", f"{int(tax_info['tax_estimated']):,}원")
+    st.progress(min(1.0, max(0.0, tax_info['realized_profit'] / 2500000)))
     if tax_info['log']:
         for log in tax_info['log']: st.text(log)
-    else: st.info("매도 내역 없음")
 
 with tab6:
     st.subheader("📈 자산 변화 추이")
