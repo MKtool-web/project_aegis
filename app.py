@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V26.0 (Final)", layout="wide")
+st.set_page_config(page_title="Project Aegis V26.2", layout="wide")
 
 # 🔒 로그인 시스템
 def check_password():
@@ -282,7 +282,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V26.0 (Final)")
+st.title("🛡️ Project Aegis V26.2 (Final)")
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
@@ -609,7 +609,8 @@ with tab6:
     st.subheader("📈 자산 변화 추이")
     history_df = calculate_history(df_stock, df_cash)
     if not history_df.empty:
-        chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고", "총 투자원금"], horizontal=True)
+        # 🔥 [FIX] unique key를 부여하여 탭 튕김 방지
+        chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고", "총 투자원금"], horizontal=True, key="history_chart_opt")
         if chart_opt == "보유 수량":
             long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
             c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Qty', color='Ticker', tooltip=['Date', 'Ticker', 'Qty']).interactive()
