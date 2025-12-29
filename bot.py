@@ -19,7 +19,10 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHL
 MIN_KRW_ACTION = 10000   
 MIN_USD_ACTION = 100     
 REVERSE_EX_GAP = 15      
-REAL_SPREAD = 3.0        
+
+# 🔥 [NEW] 현실적인 수수료율 (Spread Rate)
+# 선생님 계좌 분석 결과 약 0.83%이므로, 보수적으로 0.9% 적용
+SPREAD_RATE = 0.009 
 
 def send_telegram(message):
     try:
@@ -79,7 +82,6 @@ def calculate_balances(df_cash, df_stock):
         usd += (divs['Price'] - divs['Fee']).sum()
     return krw, usd
 
-# 🔥 [UPDATE] 평단가 자동 리셋 로직 적용
 def calculate_my_avg_exchange_rate(df_cash, df_stock):
     has_stock = False
     if not df_stock.empty:
@@ -146,8 +148,9 @@ def run_bot():
         my_avg_rate = calculate_my_avg_exchange_rate(df_cash, df_stock)
         my_krw, my_usd = calculate_balances(df_cash, df_stock)
         
-        real_buy_rate = curr_rate + REAL_SPREAD 
-        real_sell_rate = curr_rate - REAL_SPREAD
+        # 🔥 [수정] 비율(%) 기반의 현실적 거래가 계산
+        real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
+        real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
 
         msg = f"📡 **[Aegis Smart Strategy]**\n"
         msg += f"📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n"
@@ -156,7 +159,7 @@ def run_bot():
 
         should_send = False
 
-        # 1. 환전
+        # 1. 환전 (살 때) - 수수료 낸 가격(real_buy_rate)이 평단보다 싸야 함
         buy_diff = real_buy_rate - my_avg_rate
         if my_krw >= MIN_KRW_ACTION and is_bank_open: 
             suggest_percent = 0
@@ -170,7 +173,7 @@ def run_bot():
                 msg += f"💵 **[환전 추천]** (예상 {real_buy_rate:,.0f}원)\n{strategy_msg}\n👉 추천: {int(amount_to_exchange):,}원\n\n"
                 should_send = True
 
-        # 2. 역환전
+        # 2. 역환전 (팔 때) - 수수료 떼인 가격(real_sell_rate)이 평단보다 비싸야 함
         sell_diff = real_sell_rate - my_avg_rate
         is_stock_cheap = (qqqm_rsi < 50 or vix > 25)
         
@@ -178,7 +181,7 @@ def run_bot():
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
-        # 3. AI 포트폴리오 매수 (소수점 포함)
+        # 3. AI 포트폴리오 매수
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30):
             if qqqm_rsi < 40:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
