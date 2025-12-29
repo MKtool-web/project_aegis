@@ -467,25 +467,7 @@ profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 # 탭 구성
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
-with tab1:
-    # 🔥 [NEW] 실시간 주가 전광판 (Ticker Board)
-    st.subheader("📊 실시간 시세 (Real-time)")
-    
-    # 주요 종목 가격 조회
-    p_qqqm = get_current_price("QQQM")
-    p_spym = get_current_price("SPYM")
-    p_sgov = get_current_price("SGOV")
-    p_gmmf = get_current_price("GMMF")
-    
-    # 4개 컬럼으로 나란히 표시
-    t1, t2, t3, t4 = st.columns(4)
-    t1.metric("QQQM (성장)", f"${p_qqqm:.2f}")
-    t2.metric("SPYM (안정)", f"${p_spym:.2f}")
-    t3.metric("SGOV (현금)", f"${p_sgov:.2f}")
-    t4.metric("GMMF (월배당)", f"${p_gmmf:.2f}")
-    
-    st.markdown("---")
-    
+with tab1:    
     st.subheader("💰 자산 현황")
     col1, col2, col3 = st.columns(3)
     col1.metric("총 자산 (주식+현금)", f"{int(total_asset):,}원", help="주식 평가액 + 원화 잔고 + (달러 잔고 × 환율)")
@@ -504,6 +486,18 @@ with tab1:
         c1.metric("현재 환율", f"{krw_rate:,.0f}원")
         
     c2.metric("보유 주식 평가액", f"{int(total_stock_val_krw):,}원")
+    # 주요 종목 가격 조회
+    p_qqqm = get_current_price("QQQM")
+    p_spym = get_current_price("SPYM")
+    p_sgov = get_current_price("SGOV")
+    p_gmmf = get_current_price("GMMF")
+    
+    # 4개 컬럼으로 나란히 표시
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("QQQM (성장)", f"${p_qqqm:.2f}")
+    t2.metric("SPYM (안정)", f"${p_spym:.2f}")
+    t3.metric("SGOV (현금)", f"${p_sgov:.2f}")
+    t4.metric("GMMF (월배당)", f"${p_gmmf:.2f}")
     
     st.markdown("---")
     with st.expander("🔍 잔고 상세 보기"):
