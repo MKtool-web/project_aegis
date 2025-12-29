@@ -608,22 +608,54 @@ with tab5:
 with tab6:
     st.subheader("📈 자산 변화 추이")
     history_df = calculate_history(df_stock, df_cash)
+    
     if not history_df.empty:
-        # 🔥 [FIX] unique key를 부여하여 탭 튕김 방지
-        chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고", "총 투자원금"], horizontal=True, key="history_chart_opt")
+        # 차트 선택 옵션 (key를 고정하여 튕김 현상 최소화 시도)
+        chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고 (KRW vs USD)", "총 투자원금"], horizontal=True, key="history_chart_opt_v2")
+        
+        # 1. 보유 수량 (기존 유지)
         if chart_opt == "보유 수량":
             long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
-            c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Qty', color='Ticker', tooltip=['Date', 'Ticker', 'Qty']).interactive()
+            c = alt.Chart(long_df).mark_line(point=True).encode(
+                x='Date', 
+                y='Qty', 
+                color='Ticker', 
+                tooltip=['Date', 'Ticker', 'Qty']
+            ).interactive()
             st.altair_chart(c, use_container_width=True)
-        elif chart_opt == "현금 잔고":
-            long_df = history_df.melt('Date', value_vars=['Cash_KRW', 'Cash_USD'], var_name='Currency', value_name='Amount')
-            c = alt.Chart(long_df).mark_line(point=True).encode(x='Date', y='Amount', color='Currency', tooltip=['Date', 'Currency', 'Amount']).interactive()
-            st.altair_chart(c, use_container_width=True)
+            
+        # 2. 현금 잔고 (🔥 이중 축 적용!)
+        elif chart_opt == "현금 잔고 (KRW vs USD)":
+            base = alt.Chart(history_df).encode(x='Date:T')
+            
+            # 왼쪽 축: 원화 (KRW) - 파란색
+            line_krw = base.mark_line(color='#1f77b4', point=True).encode(
+                y=alt.Y('Cash_KRW', axis=alt.Axis(title='원화 (KRW)', titleColor='#1f77b4', format=',d')),
+                tooltip=['Date', 'Cash_KRW']
+            )
+            
+            # 오른쪽 축: 달러 (USD) - 초록색
+            line_usd = base.mark_line(color='#2ca02c', point=True).encode(
+                y=alt.Y('Cash_USD', axis=alt.Axis(title='달러 (USD)', titleColor='#2ca02c', format=',.2f')),
+                tooltip=['Date', 'Cash_USD']
+            )
+            
+            # 두 차트를 겹치고 축을 독립적으로 설정 (resolve_scale)
+            combined_chart = (line_krw + line_usd).resolve_scale(y='independent').interactive()
+            
+            st.altair_chart(combined_chart, use_container_width=True)
+            
+        # 3. 총 투자원금 (기존 유지)
         elif chart_opt == "총 투자원금":
-            c = alt.Chart(history_df).mark_line(point=True, color='red').encode(x='Date', y='Total_Invested', tooltip=['Date', 'Total_Invested']).interactive()
+            c = alt.Chart(history_df).mark_line(point=True, color='red').encode(
+                x='Date', 
+                y=alt.Y('Total_Invested', axis=alt.Axis(format=',d')), 
+                tooltip=['Date', 'Total_Invested']
+            ).interactive()
             st.altair_chart(c, use_container_width=True)
-    else: st.info("데이터 부족")
-
+            
+    else: st.info("데이터 부족: 거래 내역이 쌓이면 그래프가 표시됩니다.")
+        
 with tab7:
     st.dataframe(df_stock, use_container_width=True)
     st.dataframe(df_cash, use_container_width=True)
