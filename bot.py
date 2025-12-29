@@ -20,8 +20,7 @@ MIN_KRW_ACTION = 10000
 MIN_USD_ACTION = 100     
 REVERSE_EX_GAP = 15      
 
-# 🔥 [NEW] 현실적인 수수료율 (Spread Rate)
-# 선생님 계좌 분석 결과 약 0.83%이므로, 보수적으로 0.9% 적용
+# 🔥 [설정] 현실적인 수수료율 (Spread Rate: 0.9%)
 SPREAD_RATE = 0.009 
 
 def send_telegram(message):
@@ -141,39 +140,66 @@ def run_bot():
         vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         qqqm_price, qqqm_rsi = analyze_market("QQQM")
         spym_price, spym_rsi = analyze_market("SPYM")
-        curr_rate = yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1]
+        
+        # 🔥 [NEW] 환율 및 이동평균선(MA20) 분석
+        ex_df = yf.Ticker("KRW=X").history(period="1mo")
+        curr_rate = ex_df['Close'].iloc[-1]
+        if len(ex_df) > 0:
+            ma_20 = ex_df['Close'].mean() # 최근 1달 평균 환율
+        else:
+            ma_20 = curr_rate
         
         if curr_rate == 0 or qqqm_price == 0: raise ValueError("시장 데이터 수신 실패 (가격 0)")
 
         my_avg_rate = calculate_my_avg_exchange_rate(df_cash, df_stock)
         my_krw, my_usd = calculate_balances(df_cash, df_stock)
         
-        # 🔥 [수정] 비율(%) 기반의 현실적 거래가 계산
+        # 🔥 [NEW] 배당금 총액 계산 (Snowball Status)
+        total_div = 0.0
+        if not df_stock.empty:
+            df_stock['Price'] = pd.to_numeric(df_stock['Price'], errors='coerce').fillna(0)
+            df_stock['Fee'] = pd.to_numeric(df_stock['Fee'], errors='coerce').fillna(0)
+            divs = df_stock[df_stock['Action'] == 'DIVIDEND']
+            total_div = (divs['Price'] - divs['Fee']).sum()
+
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
 
         msg = f"📡 **[Aegis Smart Strategy]**\n"
         msg += f"📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n"
         msg += f"💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n"
+        msg += f"❄️ 배당 스노우볼: ${total_div:.2f}\n" # 알림에 배당 현황 추가
         msg += f"📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n\n"
 
         should_send = False
 
-        # 1. 환전 (살 때) - 수수료 낸 가격(real_buy_rate)이 평단보다 싸야 함
+        # 1. 환전 (살 때) - 부자의 딜레마 해결
         buy_diff = real_buy_rate - my_avg_rate
+        
+        # 🔥 상대적 저평가 (Historic Cheapness) 조건 추가
+        # 내 평단보다 비싸더라도, 최근 한 달 평균(MA20)보다 5원 이상 싸면 기회로 판단
+        is_cheap_historically = real_buy_rate < (ma_20 - 5.0)
+
         if my_krw >= MIN_KRW_ACTION and is_bank_open: 
             suggest_percent = 0
             strategy_msg = ""
+            
+            # Case A: 절대적 저평가 (내 평단보다 쌈) -> 강력 매수
             if -15 < buy_diff <= -5: suggest_percent = 30; strategy_msg = "📉 환율 소폭 하락."
             elif -30 < buy_diff <= -15: suggest_percent = 50; strategy_msg = "📉📉 환율 매력적!"
             elif buy_diff <= -30: suggest_percent = 100; strategy_msg = "💎 [바겐세일] 역대급 환율!"
+            
+            # Case B: 상대적 저평가 (내 평단보단 비싸지만 MA20보단 쌈) -> 분할 매수
+            elif buy_diff > -5 and is_cheap_historically:
+                suggest_percent = 30
+                strategy_msg = f"🌊 [물결 타기] 평단보단 높지만,\n최근 평균({ma_20:,.0f}원)보다 저렴합니다."
                 
             if suggest_percent > 0:
                 amount_to_exchange = my_krw * (suggest_percent / 100)
                 msg += f"💵 **[환전 추천]** (예상 {real_buy_rate:,.0f}원)\n{strategy_msg}\n👉 추천: {int(amount_to_exchange):,}원\n\n"
                 should_send = True
 
-        # 2. 역환전 (팔 때) - 수수료 떼인 가격(real_sell_rate)이 평단보다 비싸야 함
+        # 2. 역환전 (팔 때)
         sell_diff = real_sell_rate - my_avg_rate
         is_stock_cheap = (qqqm_rsi < 50 or vix > 25)
         
@@ -181,9 +207,9 @@ def run_bot():
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
-        # 3. AI 포트폴리오 매수
+        # 3. AI 포트폴리오 매수 (SGOV 매수는 포함하지 않음 - 배당금 보존)
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30):
-            if qqqm_rsi < 40:
+            if qqqm_rsi < 40: # 조정장에서만 매수 추천
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
                 intensity = "30%" if qqqm_rsi >= 30 else "50% (공포매수)"
                 msg += f"📈 **[QQQM 매수 추천]**\n• AI 판단: 조정장 (RSI {qqqm_rsi:.1f})\n• 현재가: ${qqqm_price:.2f}\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
