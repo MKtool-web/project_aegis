@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V23.1 (UI Improved)", layout="wide")
+st.set_page_config(page_title="Project Aegis V26.0 (Final)", layout="wide")
 
 # 🔒 로그인 시스템
 def check_password():
@@ -125,15 +125,55 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
 
-# 내 평균 환전가 계산
-def calculate_my_avg_exchange_rate(df_cash):
-    if df_cash.empty: return 0
-    buys = df_cash[df_cash['Type'] == 'Exchange']
-    if buys.empty: return 0
-    total_krw = pd.to_numeric(buys['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').sum()
-    total_usd = pd.to_numeric(buys['Amount_USD'].astype(str).str.replace(',', ''), errors='coerce').sum()
-    if total_usd == 0: return 0
-    return total_krw / total_usd
+# 🔥 [UPDATE] 평단가 계산 (자동 리셋 로직 포함)
+def calculate_my_avg_exchange_rate(df_cash, df_stock):
+    # 1. 주식 보유 여부 확인
+    has_stock = False
+    if not df_stock.empty:
+        df_stock['Qty'] = pd.to_numeric(df_stock['Qty'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        total_buy = df_stock[df_stock['Action'] == 'BUY']['Qty'].sum()
+        total_sell = df_stock[df_stock['Action'] == 'SELL']['Qty'].sum()
+        if (total_buy - total_sell) > 0.001: 
+            has_stock = True
+
+    # 2. 캐시플로우 분석 (이동평균법)
+    if df_cash.empty: return 1450.0
+    df = df_cash.copy()
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values('Date')
+    
+    total_usd_held = 0.0
+    total_krw_spent = 0.0
+    last_valid_rate = 1450.0 
+    
+    for _, row in df.iterrows():
+        try:
+            amt_krw = float(str(row['Amount_KRW']).replace(',', ''))
+            amt_usd = float(str(row['Amount_USD']).replace(',', ''))
+        except: continue
+            
+        if row['Type'] == 'Exchange':  # 매수
+            total_usd_held += amt_usd
+            total_krw_spent += amt_krw
+            if total_usd_held > 0:
+                last_valid_rate = total_krw_spent / total_usd_held
+            
+        elif row['Type'] == 'Exchange_USD_to_KRW':  # 매도 (평단 유지)
+            if total_usd_held > 0:
+                current_avg = total_krw_spent / total_usd_held
+                sell_usd = min(amt_usd, total_usd_held) 
+                total_usd_held -= sell_usd
+                total_krw_spent -= (sell_usd * current_avg)
+            
+            if total_usd_held <= 0.1: # 잔고 소진 시
+                total_usd_held = 0
+                total_krw_spent = 0
+
+    # 3. 최종 판단
+    if total_usd_held > 0: return total_krw_spent / total_usd_held
+    if has_stock: return last_valid_rate # 주식 있으면 평단 기억
+    return 1450.0 # 주식도 없고 돈도 없으면 리셋
 
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
@@ -242,7 +282,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V23.1 (UI Improved)")
+st.title("🛡️ Project Aegis V26.0 (Final)")
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
@@ -266,11 +306,12 @@ try:
     else: df_cash['Date'] = pd.to_datetime(df_cash['Date']).dt.strftime("%Y-%m-%d")
 except: df_cash = pd.DataFrame()
 
+# 🔥 [UPDATE] 평단가 계산 시 주식 보유 여부 확인 (df_stock 전달)
+my_avg_exchange = calculate_my_avg_exchange_rate(df_cash, df_stock)
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
 krw_rate = get_usd_krw()
 monthly_div, total_div_all = calculate_dividend_analytics(df_stock)
-my_avg_exchange = calculate_my_avg_exchange_rate(df_cash)
 
 vix_val, vix_hist = get_vix_data()
 q_price, q_rsi, q_hist = get_market_analysis("QQQM")
@@ -427,7 +468,6 @@ profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:
-    # 🔥 [NEW] 메인 지표 UI 개선 (2단 구성)
     st.subheader("💰 자산 현황")
     col1, col2, col3 = st.columns(3)
     col1.metric("총 자산 (주식+현금)", f"{int(total_asset):,}원", help="주식 평가액 + 원화 잔고 + (달러 잔고 × 환율)")
@@ -438,7 +478,6 @@ with tab1:
     st.subheader("💵 환율 및 주식")
     c1, c2 = st.columns(2)
     
-    # 환율 정보 (내 평단 비교 표시)
     if my_avg_exchange > 0:
         ex_diff = krw_rate - my_avg_exchange
         ex_pct = (ex_diff / my_avg_exchange) * 100
