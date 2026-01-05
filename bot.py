@@ -7,6 +7,7 @@ import requests
 import ta
 import pytz 
 import traceback
+import time # 🔥 [필수] 시간 지연을 위해 추가됨
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
@@ -46,18 +47,34 @@ def is_banking_hours():
     if 9 <= now_kst.hour < 16: return True
     return False
 
+# 🔥 [강화 1] 구글 시트 503 에러 방어 (재접속 로직)
 def get_sheet_data():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds_dict = json.loads(os.environ['GCP_SERVICE_ACCOUNT'])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(SHEET_URL)
-    
-    sheet_name = "Sheet1"
-    try: sheet.worksheet("Sheet1")
-    except: sheet_name = "시트1"
-    
-    return pd.DataFrame(sheet.worksheet(sheet_name).get_all_records()), pd.DataFrame(sheet.worksheet("CashFlow").get_all_records())
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            creds_dict = json.loads(os.environ['GCP_SERVICE_ACCOUNT'])
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            client = gspread.authorize(creds)
+            sheet = client.open_by_url(SHEET_URL)
+            
+            sheet_name = "Sheet1"
+            try: sheet.worksheet("Sheet1")
+            except: sheet_name = "시트1"
+            
+            # API 호출 사이에 짧은 휴식
+            df_stock = pd.DataFrame(sheet.worksheet(sheet_name).get_all_records())
+            time.sleep(1) 
+            df_cash = pd.DataFrame(sheet.worksheet("CashFlow").get_all_records())
+            
+            return df_stock, df_cash
+        except Exception as e:
+            print(f"⚠️ 시트 연결 실패 ({attempt+1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5) # 실패 시 5초 대기 후 재시도
+                continue
+            else:
+                raise e
 
 def calculate_balances(df_cash, df_stock):
     krw = 0; usd = 0
@@ -125,8 +142,23 @@ def calculate_my_avg_exchange_rate(df_cash, df_stock):
     if has_stock: return last_valid_rate
     return 1450.0
 
+# 🔥 [강화 2] 야후 파이낸스 Rate Limit 방어 (안전하게 데이터 가져오기)
+def get_market_data_safe(ticker, period="2mo"):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            df = yf.Ticker(ticker).history(period=period)
+            if df.empty: raise ValueError(f"{ticker} 데이터 없음")
+            return df
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2) # 실패 시 2초 대기
+                continue
+            return pd.DataFrame()
+
 def analyze_market(ticker):
-    df = yf.Ticker(ticker).history(period="2mo")
+    # 안전한 데이터 가져오기 함수 사용
+    df = get_market_data_safe(ticker, "2mo")
     if len(df) < 14: return 0, 50
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
@@ -137,24 +169,30 @@ def run_bot():
         
         df_stock, df_cash = get_sheet_data()
         
-        vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
-        qqqm_price, qqqm_rsi = analyze_market("QQQM")
-        spym_price, spym_rsi = analyze_market("SPYM")
+        # 🔥 [강화 3] 연속 호출 시 딜레이 추가 (과속 방지)
+        vix_df = get_market_data_safe("^VIX", "5d")
+        vix = vix_df['Close'].iloc[-1] if not vix_df.empty else 0
+        time.sleep(1) # 1초 휴식
         
-        # 🔥 [NEW] 환율 및 이동평균선(MA20) 분석
-        ex_df = yf.Ticker("KRW=X").history(period="1mo")
+        qqqm_price, qqqm_rsi = analyze_market("QQQM")
+        time.sleep(1) # 1초 휴식
+        
+        spym_price, spym_rsi = analyze_market("SPYM")
+        time.sleep(1) # 1초 휴식
+        
+        # 환율 및 MA20 분석
+        ex_df = get_market_data_safe("KRW=X", "1mo")
+        if ex_df.empty: raise ValueError("환율 데이터 수신 실패")
+        
         curr_rate = ex_df['Close'].iloc[-1]
-        if len(ex_df) > 0:
-            ma_20 = ex_df['Close'].mean() # 최근 1달 평균 환율
-        else:
-            ma_20 = curr_rate
+        ma_20 = ex_df['Close'].mean() # 최근 1달 평균 환율
         
         if curr_rate == 0 or qqqm_price == 0: raise ValueError("시장 데이터 수신 실패 (가격 0)")
 
         my_avg_rate = calculate_my_avg_exchange_rate(df_cash, df_stock)
         my_krw, my_usd = calculate_balances(df_cash, df_stock)
         
-        # 🔥 [NEW] 배당금 총액 계산 (Snowball Status)
+        # 배당금 총액 계산
         total_div = 0.0
         if not df_stock.empty:
             df_stock['Price'] = pd.to_numeric(df_stock['Price'], errors='coerce').fillna(0)
@@ -168,7 +206,7 @@ def run_bot():
         msg = f"📡 **[Aegis Smart Strategy]**\n"
         msg += f"📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n"
         msg += f"💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n"
-        msg += f"❄️ 배당 스노우볼: ${total_div:.2f}\n" # 알림에 배당 현황 추가
+        msg += f"❄️ 배당 스노우볼: ${total_div:.2f}\n"
         msg += f"📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n\n"
 
         should_send = False
@@ -176,20 +214,19 @@ def run_bot():
         # 1. 환전 (살 때) - 부자의 딜레마 해결
         buy_diff = real_buy_rate - my_avg_rate
         
-        # 🔥 상대적 저평가 (Historic Cheapness) 조건 추가
-        # 내 평단보다 비싸더라도, 최근 한 달 평균(MA20)보다 5원 이상 싸면 기회로 판단
+        # 상대적 저평가 (Historic Cheapness) 조건
         is_cheap_historically = real_buy_rate < (ma_20 - 5.0)
 
         if my_krw >= MIN_KRW_ACTION and is_bank_open: 
             suggest_percent = 0
             strategy_msg = ""
             
-            # Case A: 절대적 저평가 (내 평단보다 쌈) -> 강력 매수
+            # Case A: 절대적 저평가 (내 평단보다 쌈)
             if -15 < buy_diff <= -5: suggest_percent = 30; strategy_msg = "📉 환율 소폭 하락."
             elif -30 < buy_diff <= -15: suggest_percent = 50; strategy_msg = "📉📉 환율 매력적!"
             elif buy_diff <= -30: suggest_percent = 100; strategy_msg = "💎 [바겐세일] 역대급 환율!"
             
-            # Case B: 상대적 저평가 (내 평단보단 비싸지만 MA20보단 쌈) -> 분할 매수
+            # Case B: 상대적 저평가 (내 평단보단 비싸지만 MA20보단 쌈)
             elif buy_diff > -5 and is_cheap_historically:
                 suggest_percent = 30
                 strategy_msg = f"🌊 [물결 타기] 평단보단 높지만,\n최근 평균({ma_20:,.0f}원)보다 저렴합니다."
@@ -207,9 +244,9 @@ def run_bot():
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
-        # 3. AI 포트폴리오 매수 (SGOV 매수는 포함하지 않음 - 배당금 보존)
+        # 3. AI 포트폴리오 매수
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30):
-            if qqqm_rsi < 40: # 조정장에서만 매수 추천
+            if qqqm_rsi < 40:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
                 intensity = "30%" if qqqm_rsi >= 30 else "50% (공포매수)"
                 msg += f"📈 **[QQQM 매수 추천]**\n• AI 판단: 조정장 (RSI {qqqm_rsi:.1f})\n• 현재가: ${qqqm_price:.2f}\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
