@@ -53,8 +53,15 @@ def get_current_price(ticker):
 
 @st.cache_data(ttl=300)
 def get_usd_krw():
-    try: return float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
-    except: return 1450.0
+    try: 
+        rate = float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
+        if pd.isna(rate) or rate == 0:
+            raise ValueError
+        return rate
+    except: 
+        # API 통신 실패 시 캐시를 지워 잘못된 고정값이 유지되는 것을 방지
+        st.cache_data.clear()
+        return 1450.0
 
 @st.cache_data(ttl=300)
 def get_market_analysis(ticker):
