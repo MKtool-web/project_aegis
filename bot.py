@@ -215,7 +215,7 @@ def run_bot():
         buy_diff = real_buy_rate - my_avg_rate
         
         # 상대적 저평가 (Historic Cheapness) 조건
-        is_cheap_historically = real_buy_rate < (ma_20 - 5.0)
+        is_cheap_historically = curr_rate < (ma_20 - 5.0)
 
         if my_krw >= MIN_KRW_ACTION and is_bank_open: 
             suggest_percent = 0
