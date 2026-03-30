@@ -132,6 +132,31 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
 
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma20, dxy_curr, dxy_ma20, target_weight, current_weight):
+    score = 0.0
+    score_A = 0
+    if rsi < 50: score_A += (50 - rsi) * 1.5
+    if vix > 20: score_A += (vix - 20) * 1.0
+    if current_price < ma200: score_A += 20
+    score += min(score_A, 60)
+    
+    score_B = 0
+    gap = target_weight - current_weight
+    if gap > 0: score_B += gap * 2.0
+    score += min(score_B, 30)
+    
+    today = datetime.now().day
+    days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
+    score_C = days_passed * 1.8
+    score += min(score_C, 50)
+    
+    score_D = 0
+    if curr_rate > my_avg_rate: score_D += (curr_rate - my_avg_rate) * 0.5
+    if curr_rate > krw_ma20: score_D += (curr_rate - krw_ma20) * 0.5
+    if dxy_curr > dxy_ma20: score_D = score_D * 0.5 
+    score -= min(score_D, 50)
+    return score
+
 # 🔥 [UPDATE] 평단가 계산 (자동 리셋 로직 포함)
 def calculate_my_avg_exchange_rate(df_cash, df_stock):
     # 1. 주식 보유 여부 확인
