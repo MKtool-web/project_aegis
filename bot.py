@@ -265,6 +265,7 @@ def run_bot():
         
         qqqm_current_weight = (qqqm_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
         spym_current_weight = (spym_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
+        sgov_current_weight = (sgov_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
 
         dxy_df = get_market_data_safe("DX-Y.NYB", "1mo")
         dxy_curr = dxy_df['Close'].iloc[-1] if not dxy_df.empty else 100
@@ -345,6 +346,14 @@ def run_bot():
             elif spym_rsi < 40: 
                 buy_mode = "소수점 매수" if my_usd < spym_price else "1주 이상 매수"
                 msg += f"🛡️ **[SPYM 매수 추천]**\n• AI 판단: S&P500 조정 (RSI {spym_rsi:.1f})\n👉 달러의 30% {buy_mode} 진행!\n\n"
+                should_send = True
+
+        if my_usd >= MIN_USD_ACTION and is_open and not should_send:
+            if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
+                msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
+                msg += f"• AI 판단: 현재 위험 자산(주식) 관망 유지\n"
+                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {TARGET_WEIGHTS['SGOV']:.0f}%)\n"
+                msg += f"👉 노는 달러를 SGOV에 파킹하여 배당(이자)을 챙깁니다.\n\n"
                 should_send = True
         
         if qqqm_rsi > 70 and is_open:
