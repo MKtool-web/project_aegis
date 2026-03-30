@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V26.2", layout="wide")
+st.set_page_config(page_title="Project Aegis V26.3", layout="wide")
 
 # 🔒 로그인 시스템
 def check_password():
@@ -59,7 +59,6 @@ def get_usd_krw():
             raise ValueError
         return rate
     except: 
-        # API 통신 실패 시 캐시를 지워 잘못된 고정값이 유지되는 것을 방지
         st.cache_data.clear()
         return 1450.0
 
@@ -80,7 +79,7 @@ def get_vix_data():
     except: return 0, pd.DataFrame()
 
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
-    mode = "Normal"; t_qqqm = 35; t_spym = 35; t_sgov = 30
+    mode = "Normal"; t_qqqm = 40; t_spym = 40; t_sgov = 20
     if vix > 30 or q_rsi < 30 or s_rsi < 30:
         mode = "Fear (Aggressive Buy)"; t_qqqm = 45; t_spym = 45; t_sgov = 10
     elif q_rsi > 70 or s_rsi > 70:
@@ -132,7 +131,8 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
 
-def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma20, dxy_curr, dxy_ma20, target_weight, current_weight):
+# 🔥 [UPDATE] 최신 V26.3 마스터 스코어 (대시보드 동기화)
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
     score_A = 0
     if rsi < 50: score_A += (50 - rsi) * 1.5
@@ -142,33 +142,32 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
     
     score_B = 0
     gap = target_weight - current_weight
-    if gap > 0: score_B += gap * 2.0
+    if gap > 5.0:  
+        score_B += (gap - 5.0) * 2.5
     score += min(score_B, 30)
     
+    score_C = 0
     today = datetime.now().day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
-    score_C = days_passed * 1.8
+    if my_krw >= 600000: score_C = days_passed * 1.8
+    elif my_krw >= 100000: score_C = days_passed * 0.8
     score += min(score_C, 50)
     
     score_D = 0
-    if curr_rate > my_avg_rate: score_D += (curr_rate - my_avg_rate) * 0.5
-    if curr_rate > krw_ma20: score_D += (curr_rate - krw_ma20) * 0.5
+    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
+    if curr_rate > blended_base_rate: score_D += (curr_rate - blended_base_rate) * 0.5
     if dxy_curr > dxy_ma20: score_D = score_D * 0.5 
     score -= min(score_D, 50)
     return score
 
-# 🔥 [UPDATE] 평단가 계산 (자동 리셋 로직 포함)
 def calculate_my_avg_exchange_rate(df_cash, df_stock):
-    # 1. 주식 보유 여부 확인
     has_stock = False
     if not df_stock.empty:
         df_stock['Qty'] = pd.to_numeric(df_stock['Qty'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         total_buy = df_stock[df_stock['Action'] == 'BUY']['Qty'].sum()
         total_sell = df_stock[df_stock['Action'] == 'SELL']['Qty'].sum()
-        if (total_buy - total_sell) > 0.001: 
-            has_stock = True
+        if (total_buy - total_sell) > 0.001: has_stock = True
 
-    # 2. 캐시플로우 분석 (이동평균법)
     if df_cash.empty: return 1450.0
     df = df_cash.copy()
     if 'Date' in df.columns:
@@ -185,27 +184,25 @@ def calculate_my_avg_exchange_rate(df_cash, df_stock):
             amt_usd = float(str(row['Amount_USD']).replace(',', ''))
         except: continue
             
-        if row['Type'] == 'Exchange':  # 매수
+        if row['Type'] == 'Exchange': 
             total_usd_held += amt_usd
             total_krw_spent += amt_krw
-            if total_usd_held > 0:
-                last_valid_rate = total_krw_spent / total_usd_held
+            if total_usd_held > 0: last_valid_rate = total_krw_spent / total_usd_held
             
-        elif row['Type'] == 'Exchange_USD_to_KRW':  # 매도 (평단 유지)
+        elif row['Type'] == 'Exchange_USD_to_KRW': 
             if total_usd_held > 0:
                 current_avg = total_krw_spent / total_usd_held
                 sell_usd = min(amt_usd, total_usd_held) 
                 total_usd_held -= sell_usd
                 total_krw_spent -= (sell_usd * current_avg)
             
-            if total_usd_held <= 0.1: # 잔고 소진 시
+            if total_usd_held <= 0.1: 
                 total_usd_held = 0
                 total_krw_spent = 0
 
-    # 3. 최종 판단
     if total_usd_held > 0: return total_krw_spent / total_usd_held
-    if has_stock: return last_valid_rate # 주식 있으면 평단 기억
-    return 1450.0 # 주식도 없고 돈도 없으면 리셋
+    if has_stock: return last_valid_rate 
+    return 1450.0 
 
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
@@ -314,7 +311,7 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V26.2 (Final)")
+st.title("🛡️ Project Aegis V26.3 (Final)")
 with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
     st.markdown("""
     **Project Aegis**는 매월 일정한 현금 흐름을 바탕으로 우량 ETF를 모아가는 장기 퀀트 시스템입니다.
@@ -322,8 +319,9 @@ with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
 
     * **📈 시장 기회 (Max 60점):** RSI, VIX, 200일 이동평균선을 분석해 시장의 바겐세일 정도를 수치화합니다.
     * **⚖️ 포트폴리오 밸런스 (Max 30점):** 설정된 목표 비중 대비 현재 비중이 쪼그라든 종목에 가산점을 부여해 우선 매수합니다.
-    * **⏳ 시간 압박 (Max 50점):** 매월 5일 자본 투입 후, 시간이 지날수록 점수가 상승하여 월말 전 기계적 적립식 매수를 유도합니다.
-    * **📉 환율 페널티 (Max -50점):** 현재 환율이 내 평단가나 20일 평균보다 비싸면 점수를 깎습니다. (단, 글로벌 달러 강세 시 페널티 경감)
+    * **⏳ 시간 압박 (Max 50점):** 매월 5일 자본 투입 후, 시간이 지날수록 점수가 상승하여 월말 전 기계적 적립식 매수를 유도합니다. (잉여 현금 기반 작동)
+    * **📉 환율 페널티 (Max -50점):** 현재 환율이 내 평단가나 3개월 평균(고환율 적응)보다 비싸면 점수를 깎습니다. (단, 글로벌 달러 강세 시 페널티 경감)
+    * **🛡️ SGOV 파킹 전략:** 위험 자산의 스코어가 낮을 때는 노는 달러를 안전 자산인 SGOV로 돌려 배당을 챙기며 밸런스를 맞춥니다.
     """)
 
 sheet_name = "Sheet1"
@@ -348,7 +346,6 @@ try:
     else: df_cash['Date'] = pd.to_datetime(df_cash['Date']).dt.strftime("%Y-%m-%d")
 except: df_cash = pd.DataFrame()
 
-# 🔥 [UPDATE] 평단가 계산 시 주식 보유 여부 확인 (df_stock 전달)
 my_avg_exchange = calculate_my_avg_exchange_rate(df_cash, df_stock)
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
@@ -379,9 +376,9 @@ with st.sidebar.expander("🎯 포트폴리오 목표 설정", expanded=True):
         target_sgov = st.slider("SGOV (현금성)", 0, 100, ai_sgov, disabled=True)
     else:
         st.caption("수동 설정 모드")
-        target_qqqm = st.slider("QQQM (성장)", 0, 100, 35, 5)
-        target_spym = st.slider("SPYM (안정)", 0, 100, 35, 5)
-        target_sgov = st.slider("SGOV (현금성)", 0, 100, 30, 5)
+        target_qqqm = st.slider("QQQM (성장)", 0, 100, 40, 5)
+        target_spym = st.slider("SPYM (안정)", 0, 100, 40, 5)
+        target_sgov = st.slider("SGOV (현금성)", 0, 100, 20, 5)
     total_target = target_qqqm + target_spym + target_sgov
     if total_target != 100: st.error(f"합계: {total_target}%")
     else: st.success("합계: 100%")
@@ -416,7 +413,6 @@ elif mode == "역환전/출금":
     st.sidebar.subheader("📤 자금 회수 (Exit)")
     act_type = st.sidebar.selectbox("종류", ["역환전 (달러→원화)", "출금 (내 통장으로)"])
     
-    # 환차익 UI (역환전 시)
     if act_type == "역환전 (달러→원화)":
         if my_avg_exchange > 0:
             diff = krw_rate - my_avg_exchange
@@ -437,7 +433,7 @@ elif mode == "역환전/출금":
                     log_cash_flow(date, "Exchange_USD_to_KRW", krw_out, usd_amount, ex_rate_out)
                     st.success("✅ 역환전 완료!"); time.sleep(1); st.rerun()
                 else: st.error("❌ 달러 잔고 부족")
-        else: # 출금
+        else: 
             krw_amount = st.number_input("출금할 원화(KRW)", step=10000)
             if st.form_submit_button("실행"):
                 if wallet_data['KRW'] >= krw_amount:
@@ -509,7 +505,7 @@ profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 # 탭 구성
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
-with tab1:    
+with tab1:  
     st.subheader("💰 자산 현황")
     col1, col2, col3 = st.columns(3)
     col1.metric("총 자산 (주식+현금)", f"{int(total_asset):,}원", help="주식 평가액 + 원화 잔고 + (달러 잔고 × 환율)")
@@ -528,13 +524,11 @@ with tab1:
         c1.metric("현재 환율", f"{krw_rate:,.0f}원")
         
     c2.metric("보유 주식 평가액", f"{int(total_stock_val_krw):,}원")
-    # 주요 종목 가격 조회
     p_qqqm = get_current_price("QQQM")
     p_spym = get_current_price("SPYM")
     p_sgov = get_current_price("SGOV")
     p_gmmf = get_current_price("GMMF")
     
-    # 4개 컬럼으로 나란히 표시
     t1, t2, t3, t4 = st.columns(4)
     t1.metric("QQQM (성장)", f"${p_qqqm:.2f}")
     t2.metric("SPYM (안정)", f"${p_spym:.2f}")
@@ -601,28 +595,32 @@ with tab3:
         targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0}
         rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
         
-        # 스코어 계산용 추가 데이터 (DXY, MA200)
+        try:
+            ex_df = yf.Ticker("KRW=X").history(period="3mo")
+            krw_ma60 = ex_df['Close'].tail(60).mean() if not ex_df.empty else krw_rate
+        except: krw_ma60 = krw_rate
+            
         try:
             dxy_df = yf.Ticker("DX-Y.NYB").history(period="1mo")
             dxy_curr = dxy_df['Close'].iloc[-1] if not dxy_df.empty else 100
             dxy_ma20 = dxy_df['Close'].mean() if not dxy_df.empty else 100
         except: dxy_curr, dxy_ma20 = 100, 100
         
+        my_krw = wallet_data['KRW']
+        
         for _, row in rebal_df.iterrows():
             if row['Target_%'] == 0: continue
             
-            # MA200 계산
             try:
                 hist_1y = yf.Ticker(row['종목']).history(period="1y")
                 ma200 = hist_1y['Close'].mean() if len(hist_1y) >= 200 else get_current_price(row['종목'])
             except: ma200 = get_current_price(row['종목'])
             
-            # 개별 스코어 계산
             rsi_val = q_rsi if row['종목'] == 'QQQM' else s_rsi
             master_score = calculate_aegis_master_score(
                 row['종목'], get_current_price(row['종목']), rsi_val, vix_val, ma200, 
-                krw_rate, my_avg_exchange, krw_rate, dxy_curr, dxy_ma20, 
-                row['Target_%'], row['Current_%']
+                krw_rate, my_avg_exchange, krw_ma60, dxy_curr, dxy_ma20, 
+                row['Target_%'], row['Current_%'], my_krw
             )
             
             c_i, c_a = st.columns([2, 1])
@@ -671,10 +669,8 @@ with tab6:
     history_df = calculate_history(df_stock, df_cash)
     
     if not history_df.empty:
-        # 차트 선택 옵션 (key를 고정하여 튕김 현상 최소화 시도)
         chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고 (KRW vs USD)", "총 투자원금"], horizontal=True, key="history_chart_opt_v2")
         
-        # 1. 보유 수량 (기존 유지)
         if chart_opt == "보유 수량":
             long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
             c = alt.Chart(long_df).mark_line(point=True).encode(
@@ -685,28 +681,22 @@ with tab6:
             ).interactive()
             st.altair_chart(c, use_container_width=True)
             
-        # 2. 현금 잔고 (🔥 이중 축 적용!)
         elif chart_opt == "현금 잔고 (KRW vs USD)":
             base = alt.Chart(history_df).encode(x='Date:T')
             
-            # 왼쪽 축: 원화 (KRW) - 파란색
             line_krw = base.mark_line(color='#1f77b4', point=True).encode(
                 y=alt.Y('Cash_KRW', axis=alt.Axis(title='원화 (KRW)', titleColor='#1f77b4', format=',d')),
                 tooltip=['Date', 'Cash_KRW']
             )
             
-            # 오른쪽 축: 달러 (USD) - 초록색
             line_usd = base.mark_line(color='#2ca02c', point=True).encode(
                 y=alt.Y('Cash_USD', axis=alt.Axis(title='달러 (USD)', titleColor='#2ca02c', format=',.2f')),
                 tooltip=['Date', 'Cash_USD']
             )
             
-            # 두 차트를 겹치고 축을 독립적으로 설정 (resolve_scale)
             combined_chart = (line_krw + line_usd).resolve_scale(y='independent').interactive()
-            
             st.altair_chart(combined_chart, use_container_width=True)
             
-        # 3. 총 투자원금 (기존 유지)
         elif chart_opt == "총 투자원금":
             c = alt.Chart(history_df).mark_line(point=True, color='red').encode(
                 x='Date', 
