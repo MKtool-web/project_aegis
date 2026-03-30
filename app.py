@@ -290,6 +290,16 @@ def calculate_history(df_stock, df_cash):
 # 3. 로딩 및 메인
 # ==========================================
 st.title("🛡️ Project Aegis V26.2 (Final)")
+with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
+    st.markdown("""
+    **Project Aegis**는 매월 일정한 현금 흐름을 바탕으로 우량 ETF를 모아가는 장기 퀀트 시스템입니다.
+    봇은 4가지 핵심 요소를 실시간으로 계산하여 **총점 100점** 돌파 시, 비싼 환율과 수수료를 감수하고 전략적 매수를 강행합니다.
+
+    * **📈 시장 기회 (Max 60점):** RSI, VIX, 200일 이동평균선을 분석해 시장의 바겐세일 정도를 수치화합니다.
+    * **⚖️ 포트폴리오 밸런스 (Max 30점):** 설정된 목표 비중 대비 현재 비중이 쪼그라든 종목에 가산점을 부여해 우선 매수합니다.
+    * **⏳ 시간 압박 (Max 50점):** 매월 5일 자본 투입 후, 시간이 지날수록 점수가 상승하여 월말 전 기계적 적립식 매수를 유도합니다.
+    * **📉 환율 페널티 (Max -50점):** 현재 환율이 내 평단가나 20일 평균보다 비싸면 점수를 깎습니다. (단, 글로벌 달러 강세 시 페널티 경감)
+    """)
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
