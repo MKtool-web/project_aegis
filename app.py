@@ -590,35 +590,54 @@ with tab2:
         else: st.caption("기록 없음")
 
 with tab3:
-    st.header("⚖️ AI Portfolio Rebalancer")
+    st.header("⚖️ AI Portfolio Rebalancer & Master Score")
     if use_autopilot: st.info(f"🧠 **AI 오토파일럿 작동 중: [{ai_mode}]**")
     else: st.caption("수동 목표 비율 설정 모드")
+    
     if asset_details:
         rebal_df = pd.DataFrame(asset_details)
         total_val = rebal_df['가치'].sum()
         rebal_df['Current_%'] = (rebal_df['가치'] / total_val * 100)
         targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0}
         rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
-        rebal_df['Diff_%'] = rebal_df['Current_%'] - rebal_df['Target_%']
-        rebal_df['Action_Value'] = total_val * (rebal_df['Target_%'] - rebal_df['Current_%']) / 100
-        rebal_df['Action_Value_USD'] = rebal_df['Action_Value'] / krw_rate
-        current_prices = {t: get_current_price(t) for t in rebal_df['종목']}
-        rebal_df['Price_USD'] = rebal_df['종목'].map(current_prices)
-        rebal_df['Action_Qty'] = (rebal_df['Action_Value_USD'] / rebal_df['Price_USD']).round(1)
+        
+        # 스코어 계산용 추가 데이터 (DXY, MA200)
+        try:
+            dxy_df = yf.Ticker("DX-Y.NYB").history(period="1mo")
+            dxy_curr = dxy_df['Close'].iloc[-1] if not dxy_df.empty else 100
+            dxy_ma20 = dxy_df['Close'].mean() if not dxy_df.empty else 100
+        except: dxy_curr, dxy_ma20 = 100, 100
+        
         for _, row in rebal_df.iterrows():
             if row['Target_%'] == 0: continue
+            
+            # MA200 계산
+            try:
+                hist_1y = yf.Ticker(row['종목']).history(period="1y")
+                ma200 = hist_1y['Close'].mean() if len(hist_1y) >= 200 else get_current_price(row['종목'])
+            except: ma200 = get_current_price(row['종목'])
+            
+            # 개별 스코어 계산
+            rsi_val = q_rsi if row['종목'] == 'QQQM' else s_rsi
+            master_score = calculate_aegis_master_score(
+                row['종목'], get_current_price(row['종목']), rsi_val, vix_val, ma200, 
+                krw_rate, my_avg_exchange, krw_rate, dxy_curr, dxy_ma20, 
+                row['Target_%'], row['Current_%']
+            )
+            
             c_i, c_a = st.columns([2, 1])
             with c_i:
                 st.subheader(f"{row['종목']}")
                 st.write(f"**현재 {row['Current_%']:.1f}%** vs **목표 {row['Target_%']:.1f}%**")
                 st.progress(min(1.0, max(0.0, row['Current_%']/100)))
             with c_a:
-                if row['Action_Qty'] > 0.5:
-                    cost_usd = row['Action_Value_USD']
-                    if wallet_data['USD'] >= cost_usd: st.success(f"🔵 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f})")
-                    else: st.warning(f"🟠 **매수 추천**\n\n약 {row['Action_Qty']}주\n(${cost_usd:.2f}) (부족)")
-                elif row['Action_Qty'] < -0.5: st.error(f"🔴 **매도 추천**\n\n약 {abs(row['Action_Qty'])}주")
-                else: st.info("⚪ **유지 (Good)**")
+                st.metric("🔥 Aegis Master Score", f"{master_score:.0f}점")
+                if master_score >= 100:
+                    st.error("🚨 긴급 강제 매수/환전 조건 돌파!")
+                elif master_score >= 70:
+                    st.warning("⚡ 매수 기회 근접")
+                else:
+                    st.info("❄️ 관망 유지")
             st.markdown("---")
     else: st.info("데이터 부족")
 
