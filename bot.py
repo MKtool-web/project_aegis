@@ -14,8 +14,8 @@ from datetime import datetime
 # ==========================================
 # 1. 환경 설정 및 전역 변수
 # ==========================================
-TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
-CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
+CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 SHEET_URL = "https://docs.google.com/spreadsheets/d/19EidY2HZI2sHzvuchXX5sKfugHLtEG0QY1Iq61kzmbU/edit?gid=0#gid=0"
 
 # 🔥 [설정] 봇 행동 기준
@@ -24,7 +24,7 @@ MIN_USD_ACTION = 100
 REVERSE_EX_GAP = 15      
 SPREAD_RATE = 0.009 
 
-# 🔥 [추가] 장기 투자 포트폴리오 목표 비중 (방안 1 적용)
+# 장기 투자 포트폴리오 목표 비중
 TARGET_WEIGHTS = {'QQQM': 40.0, 'SPYM': 40.0, 'SGOV': 20.0, 'GMMF': 0.0}
 
 # ==========================================
@@ -164,36 +164,44 @@ def analyze_market(ticker):
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
 # ==========================================
-# 3. 🧠 Aegis Master Score 산식 (추가됨)
+# 3. 🧠 전면 개편된 Aegis Master Score 산식
 # ==========================================
-def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma20, dxy_curr, dxy_ma20, target_weight, current_weight):
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
     
-    # A. 시장 기회 점수 (최대 +60점)
+    # A. 시장 기회 점수
     score_A = 0
     if rsi < 50: score_A += (50 - rsi) * 1.5
     if vix > 20: score_A += (vix - 20) * 1.0
     if current_price < ma200: score_A += 20
     score += min(score_A, 60)
     
-    # B. 포트폴리오 밸런스 점수 (최대 +30점)
+    # B. 포트폴리오 밸런스 점수 (시나리오 4: 달리는 말의 딜레마 - 허용 오차 밴드 ±5% 적용)
     score_B = 0
     gap = target_weight - current_weight
-    if gap > 0: score_B += gap * 2.0
+    if gap > 5.0:  
+        score_B += (gap - 5.0) * 2.5
     score += min(score_B, 30)
     
-    # C. 시간 압박 점수 (매월 5일 기준, 최대 +50점)
+    # C. 시간 압박 점수 (시나리오 1: 이월된 현금 연동)
+    score_C = 0
     today = datetime.now().day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
-    score_C = days_passed * 1.8
+    
+    if my_krw >= 600000: # 한 달 치 투자금(약 60만 원) 이상 놀고 있을 때 풀가동
+        score_C = days_passed * 1.8
+    elif my_krw >= 100000: # 애매한 금액은 완만한 압박
+        score_C = days_passed * 0.8
+        
     score += min(score_C, 50)
     
-    # D. 환율 페널티 점수 (최대 -50점)
+    # D. 환율 페널티 점수 (시나리오 2: 구조적 고환율 MA60 적용)
     score_D = 0
-    if curr_rate > my_avg_rate: score_D += (curr_rate - my_avg_rate) * 0.5
-    if curr_rate > krw_ma20: score_D += (curr_rate - krw_ma20) * 0.5
+    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
     
-    # 글로벌 달러 보정 (DXY 강세 시 페널티 반감)
+    if curr_rate > blended_base_rate: 
+        score_D += (curr_rate - blended_base_rate) * 0.5
+        
     if dxy_curr > dxy_ma20: 
         score_D = score_D * 0.5 
         
@@ -221,10 +229,12 @@ def run_bot():
         sgov_df = get_market_data_safe("SGOV", "5d")
         sgov_price = sgov_df['Close'].iloc[-1] if not sgov_df.empty else 100.0
         
-        ex_df = get_market_data_safe("KRW=X", "1mo")
+        # 3개월치 환율 데이터 (MA60 뉴노멀 기준 확보)
+        ex_df = get_market_data_safe("KRW=X", "3mo")
         if ex_df.empty: raise ValueError("환율 데이터 수신 실패")
         curr_rate = ex_df['Close'].iloc[-1]
-        ma_20 = ex_df['Close'].mean() 
+        ma_20 = ex_df['Close'].tail(20).mean() 
+        krw_ma60 = ex_df['Close'].tail(60).mean() 
         
         if curr_rate == 0 or qqqm_price == 0: raise ValueError("시장 데이터 수신 실패")
 
@@ -241,10 +251,8 @@ def run_bot():
             divs = df_stock[df_stock['Action'] == 'DIVIDEND']
             total_div = (divs['Price'] - divs['Fee']).sum()
             
-            # 🔥 [추가] 현재 비중 계산을 위한 수량 집계
             current_holdings = df_stock.groupby("Ticker").apply(lambda x: x.loc[x['Action']=='BUY','Qty'].sum() - x.loc[x['Action']=='SELL','Qty'].sum()).to_dict()
 
-        # 🔥 [추가] 포트폴리오 가치 및 비중 계산
         qqqm_qty = current_holdings.get('QQQM', 0)
         spym_qty = current_holdings.get('SPYM', 0)
         sgov_qty = current_holdings.get('SGOV', 0)
@@ -258,7 +266,6 @@ def run_bot():
         qqqm_current_weight = (qqqm_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
         spym_current_weight = (spym_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
 
-        # 🔥 [추가] 장기 추세선 및 DXY 데이터 확보
         dxy_df = get_market_data_safe("DX-Y.NYB", "1mo")
         dxy_curr = dxy_df['Close'].iloc[-1] if not dxy_df.empty else 100
         dxy_ma20 = dxy_df['Close'].mean() if not dxy_df.empty else 100
@@ -269,9 +276,9 @@ def run_bot():
         spym_1y = get_market_data_safe("SPYM", "1y")
         spym_ma200 = spym_1y['Close'].mean() if len(spym_1y) >= 200 else spym_price
 
-        # 🔥 [추가] Aegis Master Score 산출
-        qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, ma_20, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QQQM'], qqqm_current_weight)
-        spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, ma_20, dxy_curr, dxy_ma20, TARGET_WEIGHTS['SPYM'], spym_current_weight)
+        # 파라미터 업데이트: krw_ma60 및 my_krw 전달
+        qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QQQM'], qqqm_current_weight, my_krw)
+        spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['SPYM'], spym_current_weight, my_krw)
 
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
@@ -285,17 +292,24 @@ def run_bot():
 
         should_send = False
 
-        # 🚀 [추가] 최우선 판단 로직: Master Score 100점 돌파 시 강제 환전 및 매수
+        # 시나리오 3: L자형 침체 방어 (VIX 30 이상 시 분할 매수 30% 제한)
+        pacing_ratio = 0.3 if vix > 30 else 1.0
+
         if max(qqqm_score, spym_score) >= 100.0:
             target_ticker = "QQQM" if qqqm_score >= spym_score else "SPYM"
             if my_krw >= MIN_KRW_ACTION and is_bank_open:
-                msg += f"🔥 **[전략적 긴급 환전]** 스코어 100점 돌파!\n비싼 환율 페널티를 시간/기회 가치가 압도했습니다.\n👉 추천: 보유 원화 전액 환전 후 {target_ticker} 매수\n\n"
+                amount_to_exchange = my_krw * pacing_ratio
+                msg += f"🔥 **[전략적 긴급 환전]** 스코어 100점 돌파!\n"
+                if pacing_ratio < 1.0:
+                    msg += f"⚠️ VIX 급등으로 현금 소진 속도를 조절합니다 (30% 분할).\n"
+                msg += f"👉 추천: {int(amount_to_exchange):,}원 환전 후 {target_ticker} 매수\n\n"
                 should_send = True
             elif my_usd >= MIN_USD_ACTION and is_open:
-                msg += f"📈 **[전략적 긴급 매수]** 스코어 100점 돌파!\n👉 추천: 보유 달러로 {target_ticker} 전액 매수\n\n"
+                buy_mode = f"달러의 {pacing_ratio*100:.0f}% 투입"
+                msg += f"📈 **[전략적 긴급 매수]** 스코어 100점 돌파!\n👉 추천: {buy_mode}하여 {target_ticker} 매수\n\n"
                 should_send = True
 
-        # 1. 환전 (살 때) - 이전 비교 오류 수정 반영
+        # 이하 일반 로직 (should_send가 False일 때만 작동)
         buy_diff = real_buy_rate - my_avg_rate
         is_cheap_historically = curr_rate < (ma_20 - 5.0)
 
@@ -315,7 +329,6 @@ def run_bot():
                 msg += f"💵 **[환전 추천]** (예상 {real_buy_rate:,.0f}원)\n{strategy_msg}\n👉 추천: {int(amount_to_exchange):,}원\n\n"
                 should_send = True
 
-        # 2. 역환전 (팔 때)
         sell_diff = real_sell_rate - my_avg_rate
         is_stock_cheap = (qqqm_rsi < 50 or vix > 25)
         
@@ -323,7 +336,6 @@ def run_bot():
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
-        # 3. 일반 포트폴리오 매수
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
             if qqqm_rsi < 40:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
