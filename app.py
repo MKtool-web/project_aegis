@@ -131,6 +131,33 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
     return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
 
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
+    score = 0.0
+    score_A = 0
+    if rsi < 50: score_A += (50 - rsi) * 1.5
+    if vix > 20: score_A += (vix - 20) * 1.0
+    if current_price < ma200: score_A += 20
+    score += min(score_A, 60)
+    
+    score_B = 0
+    gap = target_weight - current_weight
+    if gap > 5.0: score_B += (gap - 5.0) * 2.5
+    score += min(score_B, 30)
+    
+    score_C = 0
+    today = datetime.now().day
+    days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
+    if my_krw >= 600000: score_C = days_passed * 1.8
+    elif my_krw >= 100000: score_C = days_passed * 0.8
+    score += min(score_C, 50)
+    
+    score_D = 0
+    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
+    if curr_rate > blended_base_rate: score_D += (curr_rate - blended_base_rate) * 0.5
+    if dxy_curr > dxy_ma20: score_D = score_D * 0.5 
+    score -= min(score_D, 50)
+    return score
+
 # 🔥 [UPDATE] 최신 V26.3 마스터 스코어 (대시보드 동기화)
 def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
