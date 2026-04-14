@@ -163,6 +163,37 @@ def analyze_market(ticker):
     if len(df) < 14: return 0, 50
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
+# 🔥 장기 투자 목표 비중 설정
+TARGET_WEIGHTS = {'QQQM': 40.0, 'SPYM': 40.0, 'SGOV': 20.0, 'GMMF': 0.0}
+
+# 🔥 Aegis Master Score 산식
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
+    score = 0.0
+    score_A = 0
+    if rsi < 50: score_A += (50 - rsi) * 1.5
+    if vix > 20: score_A += (vix - 20) * 1.0
+    if current_price < ma200: score_A += 20
+    score += min(score_A, 60)
+    
+    score_B = 0
+    gap = target_weight - current_weight
+    if gap > 5.0: score_B += (gap - 5.0) * 2.5
+    score += min(score_B, 30)
+    
+    score_C = 0
+    today = datetime.now().day
+    days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
+    if my_krw >= 600000: score_C = days_passed * 1.8
+    elif my_krw >= 100000: score_C = days_passed * 0.8
+    score += min(score_C, 50)
+    
+    score_D = 0
+    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
+    if curr_rate > blended_base_rate: score_D += (curr_rate - blended_base_rate) * 0.5
+    if dxy_curr > dxy_ma20: score_D = score_D * 0.5 
+    score -= min(score_D, 50)
+    return score
+
 # ==========================================
 # 3. 🧠 전면 개편된 Aegis Master Score 산식
 # ==========================================
@@ -229,7 +260,6 @@ def run_bot():
         sgov_df = get_market_data_safe("SGOV", "5d")
         sgov_price = sgov_df['Close'].iloc[-1] if not sgov_df.empty else 100.0
         
-        # 3개월치 환율 데이터 (MA60 뉴노멀 기준 확보)
         ex_df = get_market_data_safe("KRW=X", "3mo")
         if ex_df.empty: raise ValueError("환율 데이터 수신 실패")
         curr_rate = ex_df['Close'].iloc[-1]
@@ -250,7 +280,6 @@ def run_bot():
             
             divs = df_stock[df_stock['Action'] == 'DIVIDEND']
             total_div = (divs['Price'] - divs['Fee']).sum()
-            
             current_holdings = df_stock.groupby("Ticker").apply(lambda x: x.loc[x['Action']=='BUY','Qty'].sum() - x.loc[x['Action']=='SELL','Qty'].sum()).to_dict()
 
         qqqm_qty = current_holdings.get('QQQM', 0)
@@ -273,27 +302,18 @@ def run_bot():
         
         qqqm_1y = get_market_data_safe("QQQM", "1y")
         qqqm_ma200 = qqqm_1y['Close'].mean() if len(qqqm_1y) >= 200 else qqqm_price
-        
         spym_1y = get_market_data_safe("SPYM", "1y")
         spym_ma200 = spym_1y['Close'].mean() if len(spym_1y) >= 200 else spym_price
 
-        # 파라미터 업데이트: krw_ma60 및 my_krw 전달
         qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QQQM'], qqqm_current_weight, my_krw)
         spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['SPYM'], spym_current_weight, my_krw)
 
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
 
-        msg = f"📡 **[Aegis Smart Strategy]**\n"
-        msg += f"📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n"
-        msg += f"💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n"
-        msg += f"❄️ 배당 스노우볼: ${total_div:.2f}\n"
-        msg += f"📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n"
-        msg += f"🧠 **AI Score**: QQQM {qqqm_score:.0f}점 | SPYM {spym_score:.0f}점\n\n"
+        msg = f"📡 **[Aegis Smart Strategy]**\n📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n❄️ 배당 스노우볼: ${total_div:.2f}\n📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n🧠 **AI Score**: QQQM {qqqm_score:.0f}점 | SPYM {spym_score:.0f}점\n\n"
 
         should_send = False
-
-        # 시나리오 3: L자형 침체 방어 (VIX 30 이상 시 분할 매수 30% 제한)
         pacing_ratio = 0.3 if vix > 30 else 1.0
 
         if max(qqqm_score, spym_score) >= 100.0:
@@ -301,8 +321,7 @@ def run_bot():
             if my_krw >= MIN_KRW_ACTION and is_bank_open:
                 amount_to_exchange = my_krw * pacing_ratio
                 msg += f"🔥 **[전략적 긴급 환전]** 스코어 100점 돌파!\n"
-                if pacing_ratio < 1.0:
-                    msg += f"⚠️ VIX 급등으로 현금 소진 속도를 조절합니다 (30% 분할).\n"
+                if pacing_ratio < 1.0: msg += f"⚠️ VIX 급등으로 현금 소진 속도를 조절합니다 (30% 분할).\n"
                 msg += f"👉 추천: {int(amount_to_exchange):,}원 환전 후 {target_ticker} 매수\n\n"
                 should_send = True
             elif my_usd >= MIN_USD_ACTION and is_open:
@@ -310,20 +329,17 @@ def run_bot():
                 msg += f"📈 **[전략적 긴급 매수]** 스코어 100점 돌파!\n👉 추천: {buy_mode}하여 {target_ticker} 매수\n\n"
                 should_send = True
 
-        # 이하 일반 로직 (should_send가 False일 때만 작동)
         buy_diff = real_buy_rate - my_avg_rate
         is_cheap_historically = curr_rate < (ma_20 - 5.0)
 
         if my_krw >= MIN_KRW_ACTION and is_bank_open and not should_send: 
             suggest_percent = 0
             strategy_msg = ""
-            
             if -15 < buy_diff <= -5: suggest_percent = 30; strategy_msg = "📉 환율 소폭 하락."
             elif -30 < buy_diff <= -15: suggest_percent = 50; strategy_msg = "📉📉 환율 매력적!"
             elif buy_diff <= -30: suggest_percent = 100; strategy_msg = "💎 [바겐세일] 역대급 환율!"
             elif buy_diff > -5 and is_cheap_historically:
-                suggest_percent = 30
-                strategy_msg = f"🌊 [물결 타기] 평단보단 높지만,\n최근 평균({ma_20:,.0f}원)보다 저렴합니다."
+                suggest_percent = 30; strategy_msg = f"🌊 [물결 타기] 평단보단 높지만,\n최근 평균({ma_20:,.0f}원)보다 저렴합니다."
                 
             if suggest_percent > 0:
                 amount_to_exchange = my_krw * (suggest_percent / 100)
@@ -341,7 +357,7 @@ def run_bot():
             if qqqm_rsi < 40:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
                 intensity = "30%" if qqqm_rsi >= 30 else "50% (공포매수)"
-                msg += f"📈 **[QQQM 매수 추천]**\n• AI 판단: 조정장 (RSI {qqqm_rsi:.1f})\n• 현재가: ${qqqm_price:.2f}\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
+                msg += f"📈 **[QQQM 매수 추천]**\n• AI 판단: 조정장 (RSI {qqqm_rsi:.1f})\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
                 should_send = True
             elif spym_rsi < 40: 
                 buy_mode = "소수점 매수" if my_usd < spym_price else "1주 이상 매수"
@@ -350,12 +366,9 @@ def run_bot():
 
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
             if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
-                msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
-                msg += f"• AI 판단: 현재 위험 자산(주식) 관망 유지\n"
-                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {TARGET_WEIGHTS['SGOV']:.0f}%)\n"
-                msg += f"👉 노는 달러를 SGOV에 파킹하여 배당(이자)을 챙깁니다.\n\n"
+                msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n• 현재 위험 자산(주식) 관망 유지\n• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {TARGET_WEIGHTS['SGOV']:.0f}%)\n👉 노는 달러를 SGOV에 파킹합니다.\n\n"
                 should_send = True
-        
+
         if qqqm_rsi > 70 and is_open:
             msg += "🔴 **[QQQM 과열]** (RSI > 70). 수익 실현 고려.\n"
             should_send = True
@@ -364,8 +377,7 @@ def run_bot():
             send_telegram(msg)
 
     except Exception as e:
-        error_msg = f"⚠️ **[Aegis System Error]**\n봇 실행 중 문제가 발생했습니다.\n\n🔻 에러 내용:\n{str(e)}\n\n👉 GitHub Actions 로그를 확인해주세요."
-        send_telegram(error_msg)
+        send_telegram(f"⚠️ **[Aegis System Error]**\n🔻 에러 내용:\n{str(e)}")
         print(traceback.format_exc())
 
 if __name__ == "__main__":
