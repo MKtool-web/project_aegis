@@ -364,14 +364,40 @@ def run_bot():
                 msg += f"🛡️ **[SPYM 매수 추천]**\n• AI 판단: S&P500 조정 (RSI {spym_rsi:.1f})\n👉 달러의 30% {buy_mode} 진행!\n\n"
                 should_send = True
 
+        # 1. 명확한 SGOV 파킹 (수량 및 유지 기간 명시)
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
             if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
-                msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n• 현재 위험 자산(주식) 관망 유지\n• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {TARGET_WEIGHTS['SGOV']:.0f}%)\n👉 노는 달러를 SGOV에 파킹합니다.\n\n"
+                sgov_buy_qty = my_usd / sgov_price
+                msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
+                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {TARGET_WEIGHTS['SGOV']:.0f}%)\n"
+                msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여, 다음 폭락장 전까지 파킹(관망)하세요.\n\n"
                 should_send = True
 
+        # 2. QQQM 과열 리밸런싱 (5% 초과 시 초과분만 매도 계산)
         if qqqm_rsi > 70 and is_open:
-            msg += "🔴 **[QQQM 과열]** (RSI > 70). 수익 실현 고려.\n"
-            should_send = True
+            if qqqm_current_weight >= (TARGET_WEIGHTS['QQQM'] + 5.0):
+                excess_pct = qqqm_current_weight - TARGET_WEIGHTS['QQQM']
+                excess_usd = total_portfolio_usd * (excess_pct / 100)
+                sell_qty = excess_usd / qqqm_price
+                sgov_qty_to_buy = excess_usd / sgov_price
+                
+                msg += f"🔴 **[QQQM 과열 리밸런싱]** (RSI {qqqm_rsi:.1f})\n"
+                msg += f"• 현재 비중: {qqqm_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
+                msg += f"👉 **실행 가이드:** QQQM 약 **{sell_qty:.2f}주** 매도 후, 그 달러로 SGOV 약 **{sgov_qty_to_buy:.2f}주** 파킹\n\n"
+                should_send = True
+
+        # 3. SPYM 과열 리밸런싱 (동일 로직 적용)
+        if spym_rsi > 70 and is_open:
+            if spym_current_weight >= (TARGET_WEIGHTS['SPYM'] + 5.0):
+                excess_pct = spym_current_weight - TARGET_WEIGHTS['SPYM']
+                excess_usd = total_portfolio_usd * (excess_pct / 100)
+                sell_qty = excess_usd / spym_price
+                sgov_qty_to_buy = excess_usd / sgov_price
+                
+                msg += f"🔴 **[SPYM 과열 리밸런싱]** (RSI {spym_rsi:.1f})\n"
+                msg += f"• 현재 비중: {spym_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
+                msg += f"👉 **실행 가이드:** SPYM 약 **{sell_qty:.2f}주** 매도 후, 그 달러로 SGOV 약 **{sgov_qty_to_buy:.2f}주** 파킹\n\n"
+                should_send = True
 
         if should_send:
             send_telegram(msg)
