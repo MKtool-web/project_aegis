@@ -53,14 +53,20 @@ def get_current_price(ticker):
 
 @st.cache_data(ttl=300)
 def get_usd_krw():
-    try: 
-        rate = float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
-        if pd.isna(rate) or rate == 0:
-            raise ValueError
-        return rate
-    except: 
-        st.cache_data.clear()
-        return 1450.0
+    max_retries = 3
+    for attempt in range(max_retries):
+        try: 
+            rate = float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
+            if pd.isna(rate) or rate == 0:
+                raise ValueError
+            return rate
+        except:
+            if attempt < max_retries - 1:
+                time.sleep(1.0) # 1초 대기 후 재시도
+                continue
+            else:
+                st.cache_data.clear()
+                return 1450.0
 
 @st.cache_data(ttl=300)
 def get_market_analysis(ticker):
