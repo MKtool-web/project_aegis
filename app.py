@@ -496,10 +496,12 @@ elif mode == "주식 거래":
                     log_stock_trade(date, ticker, action, qty, price, rate, fee)
                     st.success("✅ 매수 완료"); time.sleep(1); st.rerun()
                 else: st.error("❌ 달러 부족!")
+            elif action == "SELL":
+                log_stock_trade(date, ticker, action, qty, price, rate, fee)
+                st.success("✅ 매도 완료"); time.sleep(1); st.rerun()
             elif action == "DIVIDEND":
                 log_stock_trade(date, ticker, action, 1.0, price, rate, fee)
-                st.success("💰 배당금 입금"); time.sleep(1); st.rerun()
-            else: st.warning("매도 기록됨")
+                st.success("💰 배당금 입금"); time.sleep(1); st.rerun()s
 
 elif mode == "🗑️ 데이터 관리":
     st.sidebar.subheader("📅 날짜별 삭제")
