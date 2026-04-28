@@ -373,35 +373,37 @@ def run_bot():
                 msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여, 다음 폭락장 전까지 파킹(관망)하세요.\n\n"
                 should_send = True
 
-        # 2. QQQM 과열 리밸런싱 (5% 초과 시 초과분만 매도 계산)
+        # 2. QQQM 과열 리밸런싱 (온주 단위 반올림)
         if qqqm_rsi > 70 and is_open:
             if qqqm_current_weight >= (TARGET_WEIGHTS['QQQM'] + 5.0):
                 excess_pct = qqqm_current_weight - TARGET_WEIGHTS['QQQM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
-                sell_qty = excess_usd / qqqm_price
-                sgov_qty_to_buy = excess_usd / sgov_price
+                sell_qty = round(excess_usd / qqqm_price)
+                sgov_qty_to_buy = round(excess_usd / sgov_price)
                 
-                msg += f"🔴 **[QQQM 과열 리밸런싱]** (RSI {qqqm_rsi:.1f})\n"
-                msg += f"• 현재 비중: {qqqm_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
-                msg += f"👉 **실행 가이드:** QQQM 약 **{sell_qty:.2f}주** 매도 후, 그 달러로 SGOV 약 **{sgov_qty_to_buy:.2f}주** 파킹\n\n"
-                should_send = True
+                if sell_qty >= 1:
+                    msg += f"🔴 **[QQQM 과열 리밸런싱]** (RSI {qqqm_rsi:.1f})\n"
+                    msg += f"• 현재 비중: {qqqm_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
+                    msg += f"👉 **실행 가이드:** QQQM **{sell_qty}주** 매도 후, 그 달러로 SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
+                    should_send = True
 
-        # 3. SPYM 과열 리밸런싱 (동일 로직 적용)
+        # 3. SPYM 과열 리밸런싱 (온주 단위 반올림)
         if spym_rsi > 70 and is_open:
             if spym_current_weight >= (TARGET_WEIGHTS['SPYM'] + 5.0):
                 excess_pct = spym_current_weight - TARGET_WEIGHTS['SPYM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
-                sell_qty = excess_usd / spym_price
-                sgov_qty_to_buy = excess_usd / sgov_price
+                sell_qty = round(excess_usd / spym_price)
+                sgov_qty_to_buy = round(excess_usd / sgov_price)
                 
-                msg += f"🔴 **[SPYM 과열 리밸런싱]** (RSI {spym_rsi:.1f})\n"
-                msg += f"• 현재 비중: {spym_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
-                msg += f"👉 **실행 가이드:** SPYM 약 **{sell_qty:.2f}주** 매도 후, 그 달러로 SGOV 약 **{sgov_qty_to_buy:.2f}주** 파킹\n\n"
-                should_send = True
+                if sell_qty >= 1:
+                    msg += f"🔴 **[SPYM 과열 리밸런싱]** (RSI {spym_rsi:.1f})\n"
+                    msg += f"• 현재 비중: {spym_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
+                    msg += f"👉 **실행 가이드:** SPYM **{sell_qty}주** 매도 후, 그 달러로 SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
+                    should_send = True
 
         if should_send:
             send_telegram(msg)
-
+            
     except Exception as e:
         send_telegram(f"⚠️ **[Aegis System Error]**\n🔻 에러 내용:\n{str(e)}")
         print(traceback.format_exc())
