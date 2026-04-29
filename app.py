@@ -501,7 +501,7 @@ elif mode == "주식 거래":
                 st.success("✅ 매도 완료"); time.sleep(1); st.rerun()
             elif action == "DIVIDEND":
                 log_stock_trade(date, ticker, action, 1.0, price, rate, fee)
-                st.success("💰 배당금 입금"); time.sleep(1); st.rerun()s
+                st.success("💰 배당금 입금"); time.sleep(1); st.rerun()
 
 elif mode == "🗑️ 데이터 관리":
     st.sidebar.subheader("📅 날짜별 삭제")
