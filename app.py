@@ -56,13 +56,13 @@ def get_usd_krw():
     max_retries = 3
     for attempt in range(max_retries):
         try: 
-            rate = float(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1])
-            if pd.isna(rate) or rate == 0:
-                raise ValueError
-            return rate
+            # 1d를 5d로 수정하여 주말/새벽 공백 방지
+            df = yf.Ticker("KRW=X").history(period="5d")
+            if df.empty: raise ValueError
+            return float(df['Close'].iloc[-1])
         except:
             if attempt < max_retries - 1:
-                time.sleep(1.0) # 1초 대기 후 재시도
+                time.sleep(1.0) 
                 continue
             else:
                 st.cache_data.clear()
