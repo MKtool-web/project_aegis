@@ -538,7 +538,8 @@ net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
 # 탭 구성
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", "👮‍♂️ 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
+current_year = datetime.now().year
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", f"👮‍♂️ {current_year}년 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:  
     st.subheader("💰 자산 현황")
@@ -690,7 +691,7 @@ with tab4:
         st.altair_chart(chart, use_container_width=True)
 
 with tab5:
-    st.header("👮‍♂️ 2025년 세금 지킴이")
+    st.header(f"👮‍♂️ {current_year}년 세금 지킴이")
     t1, t2, t3 = st.columns(3)
     t1.metric("실현 수익", f"{int(tax_info['realized_profit']):,}원")
     t2.metric("남은 비과세", f"{int(tax_info['remaining_allowance']):,}원")
