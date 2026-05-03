@@ -46,7 +46,7 @@ def send_test_message():
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
     try:
-        hist = yf.Ticker(ticker).history(period="1d")
+        hist = yf.Ticker(ticker).history(period="5d")
         if not hist.empty: return float(hist['Close'].iloc[-1])
         return 0.0
     except: return 0.0
