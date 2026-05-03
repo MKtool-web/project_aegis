@@ -5,6 +5,7 @@ import time
 import requests
 import altair as alt 
 import ta
+import pytz
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
@@ -214,7 +215,8 @@ def calculate_my_avg_exchange_rate(df_cash, df_stock):
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
     df = df_stock.copy(); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
-    holdings = {}; current_year = datetime.now().year; realized_profit_krw = 0; tax_log = []
+    kst = pytz.timezone('Asia/Seoul')
+    holdings = {}; current_year = datetime.now(kst).year; realized_profit_krw = 0; tax_log = []
     for _, row in df.iterrows():
         ticker = row['Ticker']; qty = row['Qty']; price = row['Price']; fee = row['Fee']; rate = row['Exchange_Rate']
         if ticker not in holdings: holdings[ticker] = {'qty': 0, 'total_cost_krw': 0}
@@ -397,7 +399,8 @@ if mode == "입금/환전":
     st.sidebar.subheader("💱 입금 및 환전")
     act_type = st.sidebar.selectbox("종류", ["원화 입금 (Deposit)", "달러 환전 (Exchange)"])
     with st.sidebar.form("cash_form"):
-        date = st.date_input("날짜", datetime.today())
+        kst = pytz.timezone('Asia/Seoul')
+        date = st.date_input("날짜", datetime.now(kst).date())
         label_amt = "입금할 원화 금액" if "Deposit" in act_type else "환전에 쓴 원화 금액"
         amount_krw = st.number_input(label_amt, step=10000)
         ex_rate_in = krw_rate
@@ -429,7 +432,8 @@ elif mode == "역환전/출금":
             else: st.sidebar.caption("⚠️ 지금 바꾸면 환전 손해입니다.")
     
     with st.sidebar.form("exit_form"):
-        date = st.date_input("날짜", datetime.today())
+        kst = pytz.timezone('Asia/Seoul')
+        date = st.date_input("날짜", datetime.now(kst).date())
         if act_type == "역환전 (달러→원화)":
             usd_amount = st.number_input("매도할 달러($)", step=10.0)
             ex_rate_out = st.number_input("적용 환율", value=krw_rate, format="%.2f")
@@ -453,7 +457,8 @@ elif mode == "주식 거래":
     ticker = st.sidebar.selectbox("종목", ["SGOV", "SPYM", "QQQM", "GMMF"])
     action = st.sidebar.selectbox("유형", ["BUY", "SELL", "DIVIDEND"])
     with st.sidebar.form("stock_form"):
-        date = st.date_input("날짜", datetime.today())
+        kst = pytz.timezone('Asia/Seoul')
+        date = st.date_input("날짜", datetime.now(kst).date())
         qty = 1.0
         if action != "DIVIDEND": qty = st.number_input("수량 (Qty)", value=1.0, step=0.01)
         price_label = "배당금 총액 ($)" if action == "DIVIDEND" else "체결 단가 ($)"
@@ -512,7 +517,8 @@ net_profit = total_asset - total_deposit
 profit_rate = (net_profit / total_deposit * 100) if total_deposit > 0 else 0
 
 # 탭 구성
-current_year = datetime.now().year
+kst = pytz.timezone('Asia/Seoul')
+current_year = datetime.now(kst).year
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 자산 & 포트폴리오", "💰 배당 & 스노우볼", "⚖️ AI 리밸런싱", "📡 AI 시장 레이더", f"👮‍♂️ {current_year}년 세금 지킴이", "📈 추세 그래프", "📋 상세 기록"])
 
 with tab1:  
