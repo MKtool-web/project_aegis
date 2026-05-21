@@ -125,25 +125,25 @@ def calculate_my_avg_exchange_rate(df_cash, df_stock):
             amt_usd = float(str(row['Amount_USD']).replace(',', ''))
         except: continue
             
-        if row['Type'] == 'Exchange':
+        if row['Type'] == 'Exchange': 
             total_usd_held += amt_usd
             total_krw_spent += amt_krw
             if total_usd_held > 0: last_valid_rate = total_krw_spent / total_usd_held
             
-        elif row['Type'] == 'Exchange_USD_to_KRW':
+        elif row['Type'] == 'Exchange_USD_to_KRW': 
             if total_usd_held > 0:
                 current_avg = total_krw_spent / total_usd_held
                 sell_usd = min(amt_usd, total_usd_held) 
                 total_usd_held -= sell_usd
                 total_krw_spent -= (sell_usd * current_avg)
             
-            if total_usd_held <= 0.1:
+            if total_usd_held <= 0.1: 
                 total_usd_held = 0
                 total_krw_spent = 0
 
     if total_usd_held > 0: return total_krw_spent / total_usd_held
-    if has_stock: return last_valid_rate
-    return 1450.0
+    if has_stock: return last_valid_rate 
+    return 1450.0 
 
 def get_market_data_safe(ticker, period="2mo"):
     max_retries = 3
@@ -166,55 +166,32 @@ def analyze_market(ticker):
 # 🔥 장기 투자 목표 비중 설정
 TARGET_WEIGHTS = {'QQQM': 40.0, 'SPYM': 40.0, 'SGOV': 20.0, 'GMMF': 0.0}
 
-# 🔥 Aegis Master Score 산식
+# ==========================================
+# 3. 🧠 최신 V26.4 마스터 스코어 (방안 C: 듀얼 필터링 적용)
+# ==========================================
 def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
+    
+    # A. 시장 기회 점수 (방안 C: 가짜 폭락 필터링)
     score_A = 0
-    if rsi < 50: score_A += (50 - rsi) * 1.5
-    if vix > 20: score_A += (vix - 20) * 1.0
-    if current_price < ma200: score_A += 20
-    score += min(score_A, 60)
-    
-    score_B = 0
-    gap = target_weight - current_weight
-    if gap > 5.0: score_B += (gap - 5.0) * 2.5
-    score += min(score_B, 30)
-    
-    score_C = 0
-    today = datetime.now().day
-    days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
-    if my_krw >= 600000: score_C = days_passed * 1.8
-    elif my_krw >= 100000: score_C = days_passed * 0.8
-    score += min(score_C, 50)
-    
-    score_D = 0
-    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
-    if curr_rate > blended_base_rate: score_D += (curr_rate - blended_base_rate) * 0.5
-    if dxy_curr > dxy_ma20: score_D = score_D * 0.5 
-    score -= min(score_D, 50)
-    return score
+    if rsi < 50:
+        if vix >= 18: # 시장 전체의 진정한 공포/조정 시에만 RSI 가점 부여
+            score_A += (50 - rsi) * 1.5
+        else:
+            pass # VIX 평온(18 미만) = 개별 종목 거품 붕괴(노이즈)로 간주하여 무시
 
-# ==========================================
-# 3. 🧠 전면 개편된 Aegis Master Score 산식
-# ==========================================
-def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
-    score = 0.0
-    
-    # A. 시장 기회 점수
-    score_A = 0
-    if rsi < 50: score_A += (50 - rsi) * 1.5
     if vix > 20: score_A += (vix - 20) * 1.0
     if current_price < ma200: score_A += 20
     score += min(score_A, 60)
     
-    # B. 포트폴리오 밸런스 점수 (시나리오 4: 달리는 말의 딜레마 - 허용 오차 밴드 ±5% 적용)
+    # B. 포트폴리오 밸런스 점수 (허용 오차 밴드 ±5% 적용)
     score_B = 0
     gap = target_weight - current_weight
     if gap > 5.0:  
         score_B += (gap - 5.0) * 2.5
     score += min(score_B, 30)
     
-    # C. 시간 압박 점수 (시나리오 1: 이월된 현금 연동)
+    # C. 시간 압박 점수 (이월된 현금 연동)
     score_C = 0
     today = datetime.now().day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
@@ -226,7 +203,7 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
         
     score += min(score_C, 50)
     
-    # D. 환율 페널티 점수 (시나리오 2: 구조적 고환율 MA60 적용)
+    # D. 환율 페널티 점수 (구조적 고환율 MA60 적용)
     score_D = 0
     blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
     
@@ -353,18 +330,20 @@ def run_bot():
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
+        # 🔥 방안 C: VIX 기반 가짜 하락(노이즈) 필터링 로직 추가
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
-            if qqqm_rsi < 40:
+            if qqqm_rsi < 40 and vix >= 18:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
                 intensity = "30%" if qqqm_rsi >= 30 else "50% (공포매수)"
-                msg += f"📈 **[QQQM 매수 추천]**\n• AI 판단: 조정장 (RSI {qqqm_rsi:.1f})\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
+                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파 (진짜 공포장)\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
                 should_send = True
-            elif spym_rsi < 40: 
+            elif spym_rsi < 40 and vix >= 18: 
                 buy_mode = "소수점 매수" if my_usd < spym_price else "1주 이상 매수"
-                msg += f"🛡️ **[SPYM 매수 추천]**\n• AI 판단: S&P500 조정 (RSI {spym_rsi:.1f})\n👉 달러의 30% {buy_mode} 진행!\n\n"
+                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파 (진짜 공포장)\n👉 달러의 30% {buy_mode} 진행!\n\n"
                 should_send = True
 
         # 1. 명확한 SGOV 파킹 (수량 및 유지 기간 명시)
+        # 만약 RSI가 40 미만이어도 VIX가 평온하다면 위 조건문을 타지 않고 바로 일로 넘어와서 SGOV 파킹 알림을 줌
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
             if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
                 sgov_buy_qty = my_usd / sgov_price
