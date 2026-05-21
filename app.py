@@ -5,14 +5,14 @@ import time
 import requests
 import altair as alt 
 import ta
-import pytz
+import pytz 
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V26.3", layout="wide")
+st.set_page_config(page_title="Project Aegis V26.4", layout="wide")
 
 # 🔒 로그인 시스템
 def check_password():
@@ -87,7 +87,7 @@ def get_vix_data():
 
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
     mode = "Normal"; t_qqqm = 40; t_spym = 40; t_sgov = 20
-    if vix > 30 or q_rsi < 30 or s_rsi < 30:
+    if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
         mode = "Fear (Aggressive Buy)"; t_qqqm = 45; t_spym = 45; t_sgov = 10
     elif q_rsi > 70 or s_rsi > 70:
         mode = "Greed (Profit Take)"; t_qqqm = 25; t_spym = 25; t_sgov = 50
@@ -137,36 +137,6 @@ def calculate_wallet_balance_detail(df_stock, df_cash):
 
     return {'KRW': final_krw, 'USD': final_usd, 'Net_Principal': net_principal,
             'Detail_USD_In': usd_gained, 'Detail_USD_Out': usd_spent, 'Stock_Log': stock_details}
-
-
-# 🔥 [UPDATE] 최신 V26.3 마스터 스코어 (대시보드 동기화)
-def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
-    score = 0.0
-    score_A = 0
-    if rsi < 50: score_A += (50 - rsi) * 1.5
-    if vix > 20: score_A += (vix - 20) * 1.0
-    if current_price < ma200: score_A += 20
-    score += min(score_A, 60)
-    
-    score_B = 0
-    gap = target_weight - current_weight
-    if gap > 5.0:  
-        score_B += (gap - 5.0) * 2.5
-    score += min(score_B, 30)
-    
-    score_C = 0
-    today = datetime.now().day
-    days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
-    if my_krw >= 600000: score_C = days_passed * 1.8
-    elif my_krw >= 100000: score_C = days_passed * 0.8
-    score += min(score_C, 50)
-    
-    score_D = 0
-    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
-    if curr_rate > blended_base_rate: score_D += (curr_rate - blended_base_rate) * 0.5
-    if dxy_curr > dxy_ma20: score_D = score_D * 0.5 
-    score -= min(score_D, 50)
-    return score
 
 def calculate_my_avg_exchange_rate(df_cash, df_stock):
     has_stock = False
@@ -320,13 +290,13 @@ def calculate_history(df_stock, df_cash):
 # ==========================================
 # 3. 로딩 및 메인
 # ==========================================
-st.title("🛡️ Project Aegis V26.3 (Final)")
+st.title("🛡️ Project Aegis V26.4 (Dual Filtering)")
 with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
     st.markdown("""
     **Project Aegis**는 매월 일정한 현금 흐름을 바탕으로 우량 ETF를 모아가는 장기 퀀트 시스템입니다.
     봇은 4가지 핵심 요소를 실시간으로 계산하여 **총점 100점** 돌파 시, 비싼 환율과 수수료를 감수하고 전략적 매수를 강행합니다.
 
-    * **📈 시장 기회 (Max 60점):** RSI, VIX, 200일 이동평균선을 분석해 시장의 바겐세일 정도를 수치화합니다.
+    * **📈 시장 기회 (Max 60점):** RSI, VIX, 200일 이동평균선을 분석해 시장의 바겐세일 정도를 수치화합니다. (VIX 교차 검증 적용)
     * **⚖️ 포트폴리오 밸런스 (Max 30점):** 설정된 목표 비중 대비 현재 비중이 쪼그라든 종목에 가산점을 부여해 우선 매수합니다.
     * **⏳ 시간 압박 (Max 50점):** 매월 5일 자본 투입 후, 시간이 지날수록 점수가 상승하여 월말 전 기계적 적립식 매수를 유도합니다. (잉여 현금 기반 작동)
     * **📉 환율 페널티 (Max -50점):** 현재 환율이 내 평단가나 3개월 평균(고환율 적응)보다 비싸면 점수를 깎습니다. (단, 글로벌 달러 강세 시 페널티 경감)
