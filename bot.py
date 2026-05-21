@@ -163,9 +163,6 @@ def analyze_market(ticker):
     if len(df) < 14: return 0, 50
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
-# 🔥 장기 투자 목표 비중 설정
-TARGET_WEIGHTS = {'QQQM': 40.0, 'SPYM': 40.0, 'SGOV': 20.0, 'GMMF': 0.0}
-
 # ==========================================
 # 3. 🧠 최신 V26.4 마스터 스코어 (방안 C: 듀얼 필터링 적용)
 # ==========================================
@@ -191,9 +188,10 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
         score_B += (gap - 5.0) * 2.5
     score += min(score_B, 30)
     
-    # C. 시간 압박 점수 (이월된 현금 연동)
+    # C. 시간 압박 점수 (KST 한국 시간 적용)
     score_C = 0
-    today = datetime.now().day
+    kst = pytz.timezone('Asia/Seoul')
+    today = datetime.now(kst).day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
     
     if my_krw >= 600000: # 한 달 치 투자금(약 60만 원) 이상 놀고 있을 때 풀가동
@@ -288,7 +286,9 @@ def run_bot():
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
 
-        msg = f"📡 **[Aegis Smart Strategy]**\n📅 {datetime.now().strftime('%m/%d %H:%M')} ({status_msg})\n💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n❄️ 배당 스노우볼: ${total_div:.2f}\n📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n🧠 **AI Score**: QQQM {qqqm_score:.0f}점 | SPYM {spym_score:.0f}점\n\n"
+        # 텔레그램 발송 시간도 KST 적용 완료
+        kst = pytz.timezone('Asia/Seoul')
+        msg = f"📡 **[Aegis Smart Strategy]**\n📅 {datetime.now(kst).strftime('%m/%d %H:%M')} ({status_msg})\n💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n❄️ 배당 스노우볼: ${total_div:.2f}\n📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n🧠 **AI Score**: QQQM {qqqm_score:.0f}점 | SPYM {spym_score:.0f}점\n\n"
 
         should_send = False
         pacing_ratio = 0.3 if vix > 30 else 1.0
@@ -343,7 +343,6 @@ def run_bot():
                 should_send = True
 
         # 1. 명확한 SGOV 파킹 (수량 및 유지 기간 명시)
-        # 만약 RSI가 40 미만이어도 VIX가 평온하다면 위 조건문을 타지 않고 바로 일로 넘어와서 SGOV 파킹 알림을 줌
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
             if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
                 sgov_buy_qty = my_usd / sgov_price
@@ -352,7 +351,7 @@ def run_bot():
                 msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여, 다음 폭락장 전까지 파킹(관망)하세요.\n\n"
                 should_send = True
 
-        # 2. QQQM 과열 리밸런싱 (온주 단위 반올림)
+        # 2. QQQM 과열 리밸런싱
         if qqqm_rsi > 70 and is_open:
             if qqqm_current_weight >= (TARGET_WEIGHTS['QQQM'] + 5.0):
                 excess_pct = qqqm_current_weight - TARGET_WEIGHTS['QQQM']
@@ -366,7 +365,7 @@ def run_bot():
                     msg += f"👉 **실행 가이드:** QQQM **{sell_qty}주** 매도 후, 그 달러로 SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
                     should_send = True
 
-        # 3. SPYM 과열 리밸런싱 (온주 단위 반올림)
+        # 3. SPYM 과열 리밸런싱
         if spym_rsi > 70 and is_open:
             if spym_current_weight >= (TARGET_WEIGHTS['SPYM'] + 5.0):
                 excess_pct = spym_current_weight - TARGET_WEIGHTS['SPYM']
