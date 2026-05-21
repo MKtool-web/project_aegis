@@ -42,7 +42,7 @@ def send_test_message():
     except: st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
-# 1. 데이터 엔진 & AI 분석
+# 1. 데이터 엔진 & AI 분석 (여기에 함수가 있어야 NameError가 안 남!)
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
@@ -57,7 +57,6 @@ def get_usd_krw():
     max_retries = 3
     for attempt in range(max_retries):
         try: 
-            # 1d를 5d로 수정하여 주말/새벽 공백 방지
             df = yf.Ticker("KRW=X").history(period="5d")
             if df.empty: raise ValueError
             return float(df['Close'].iloc[-1])
@@ -93,7 +92,6 @@ def get_ai_target_ratios(vix, q_rsi, s_rsi):
         mode = "Greed (Profit Take)"; t_qqqm = 25; t_spym = 25; t_sgov = 50
     return t_qqqm, t_spym, t_sgov, mode
 
-# 자산 계산 로직
 def calculate_wallet_balance_detail(df_stock, df_cash):
     krw_deposit = 0; krw_withdrawn = 0; krw_used_for_usd = 0; krw_gained_from_usd = 0
     usd_gained = 0; usd_sold = 0
@@ -287,8 +285,56 @@ def calculate_history(df_stock, df_cash):
                         "Stock_SGOV": cum_stock_qty.get('SGOV',0), "Stock_QQQM": cum_stock_qty.get('QQQM',0), "Stock_SPYM": cum_stock_qty.get('SPYM',0), "Stock_GMMF": cum_stock_qty.get('GMMF',0)})
     return pd.DataFrame(history)
 
+# 🔥 [방안 C 적용] 최신 V26.4 마스터 스코어 
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
+    score = 0.0
+    
+    # A. 시장 기회 점수 (방안 C: 가짜 폭락 필터링)
+    score_A = 0
+    if rsi < 50:
+        if vix >= 18: # 시장 전체의 진정한 공포/조정 시에만 RSI 가점 부여
+            score_A += (50 - rsi) * 1.5
+        else:
+            pass # VIX 평온(18 미만) = 개별 종목 거품 붕괴(노이즈)로 간주하여 무시
+
+    if vix > 20: score_A += (vix - 20) * 1.0
+    if current_price < ma200: score_A += 20
+    score += min(score_A, 60)
+    
+    # B. 포트폴리오 밸런스 점수 (허용 오차 밴드 ±5% 적용)
+    score_B = 0
+    gap = target_weight - current_weight
+    if gap > 5.0:  
+        score_B += (gap - 5.0) * 2.5
+    score += min(score_B, 30)
+    
+    # C. 시간 압박 점수 (이월된 현금 연동)
+    score_C = 0
+    today = datetime.now().day
+    days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
+    
+    if my_krw >= 600000: # 한 달 치 투자금(약 60만 원) 이상 놀고 있을 때 풀가동
+        score_C = days_passed * 1.8
+    elif my_krw >= 100000: # 애매한 금액은 완만한 압박
+        score_C = days_passed * 0.8
+        
+    score += min(score_C, 50)
+    
+    # D. 환율 페널티 점수 (구조적 고환율 MA60 적용)
+    score_D = 0
+    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
+    
+    if curr_rate > blended_base_rate: 
+        score_D += (curr_rate - blended_base_rate) * 0.5
+        
+    if dxy_curr > dxy_ma20: 
+        score_D = score_D * 0.5 
+        
+    score -= min(score_D, 50)
+    return score
+
 # ==========================================
-# 3. 로딩 및 메인
+# 3. 로딩 및 메인 UI
 # ==========================================
 st.title("🛡️ Project Aegis V26.4 (Dual Filtering)")
 with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
