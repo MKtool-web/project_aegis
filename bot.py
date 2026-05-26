@@ -24,7 +24,7 @@ MIN_USD_ACTION = 100
 REVERSE_EX_GAP = 15      
 SPREAD_RATE = 0.009 
 
-# 🔥 [핵심] 장기 투자 포트폴리오 목표 비중 (QLD 위성 자산 편입)
+# 🔥 장기 투자 포트폴리오 목표 비중
 TARGET_WEIGHTS = {'QQQM': 30.0, 'SPYM': 30.0, 'SGOV': 20.0, 'QLD': 20.0, 'GMMF': 0.0}
 
 # ==========================================
@@ -164,7 +164,7 @@ def analyze_market(ticker):
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
 # ==========================================
-# 3. 🧠 최신 V26.5 마스터 스코어 
+# 3. 🧠 최신 V26.5 마스터 스코어 (단일 통제 시스템)
 # ==========================================
 def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
@@ -280,30 +280,39 @@ def run_bot():
         qqqm_ma200 = qqqm_1y['Close'].mean() if len(qqqm_1y) >= 200 else qqqm_price
         spym_1y = get_market_data_safe("SPYM", "1y")
         spym_ma200 = spym_1y['Close'].mean() if len(spym_1y) >= 200 else spym_price
+        qld_1y = get_market_data_safe("QLD", "1y")
+        qld_ma200 = qld_1y['Close'].mean() if len(qld_1y) >= 200 else qld_price
 
+        # 🔥 자동화 1: 봇이 모든 종목의 마스터 스코어를 똑같이 계산
         qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QQQM'], qqqm_current_weight, my_krw)
         spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['SPYM'], spym_current_weight, my_krw)
+        qld_score = calculate_aegis_master_score("QLD", qld_price, qld_rsi, vix, qld_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QLD'], qld_current_weight, my_krw)
 
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
 
         kst = pytz.timezone('Asia/Seoul')
-        msg = f"📡 **[Aegis Smart Strategy]**\n📅 {datetime.now(kst).strftime('%m/%d %H:%M')} ({status_msg})\n💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n❄️ 배당 스노우볼: ${total_div:.2f}\n📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n🧠 **AI Score**: QQQM {qqqm_score:.0f}점 | SPYM {spym_score:.0f}점\n\n"
+        msg = f"📡 **[Aegis Smart Strategy]**\n📅 {datetime.now(kst).strftime('%m/%d %H:%M')} ({status_msg})\n💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n❄️ 배당 스노우볼: ${total_div:.2f}\n📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f} / QLD-RSI {qld_rsi:.1f}\n🧠 **AI Score**: QQQM {qqqm_score:.0f} | SPYM {spym_score:.0f} | QLD {qld_score:.0f}\n\n"
 
         should_send = False
         pacing_ratio = 0.3 if vix > 30 else 1.0
 
-        if max(qqqm_score, spym_score) >= 100.0:
-            target_ticker = "QQQM" if qqqm_score >= spym_score else "SPYM"
+        # 🔥 자동화 2: 100점 돌파 시 봇이 3개 종목을 경쟁시켜 가장 저평가된 1개만 매수 지시
+        scores = {'QQQM': qqqm_score, 'SPYM': spym_score, 'QLD': qld_score}
+        max_ticker = max(scores, key=scores.get)
+        max_score = scores[max_ticker]
+
+        if max_score >= 100.0:
+            target_ticker = max_ticker
             if my_krw >= MIN_KRW_ACTION and is_bank_open:
                 amount_to_exchange = my_krw * pacing_ratio
-                msg += f"🔥 **[전략적 긴급 환전]** 스코어 100점 돌파!\n"
+                msg += f"🔥 **[전략적 긴급 환전]** 최고점({max_score:.0f}점) 돌파!\n"
                 if pacing_ratio < 1.0: msg += f"⚠️ VIX 급등으로 현금 소진 속도를 조절합니다 (30% 분할).\n"
-                msg += f"👉 추천: {int(amount_to_exchange):,}원 환전 후 {target_ticker} 매수\n\n"
+                msg += f"👉 추천: {int(amount_to_exchange):,}원 환전 후 **{target_ticker} 매수**\n\n"
                 should_send = True
             elif my_usd >= MIN_USD_ACTION and is_open:
                 buy_mode = f"달러의 {pacing_ratio*100:.0f}% 투입"
-                msg += f"📈 **[전략적 긴급 매수]** 스코어 100점 돌파!\n👉 추천: {buy_mode}하여 {target_ticker} 매수\n\n"
+                msg += f"📈 **[전략적 긴급 매수]** 최고점({max_score:.0f}점) 돌파!\n👉 추천: {buy_mode}하여 **{target_ticker} 매수**\n\n"
                 should_send = True
 
         buy_diff = real_buy_rate - my_avg_rate
@@ -324,13 +333,13 @@ def run_bot():
                 should_send = True
 
         sell_diff = real_sell_rate - my_avg_rate
-        is_stock_cheap = (qqqm_rsi < 50 or vix > 25)
+        is_stock_cheap = (qqqm_rsi < 50 or qld_rsi < 50 or vix > 25)
         
         if my_usd >= 100 and sell_diff >= REVERSE_EX_GAP and not is_stock_cheap and is_bank_open:
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
-        # 🔥 [방안 C + Tactical Strike] QLD 레버리지 줍줍 전략
+        # 🔥 진성 폭락장 직관적 매수 지시 (VIX 트리거)
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
             if vix >= 25 and qld_rsi < 35:
                 buy_mode = "소수점 매수" if my_usd < qld_price else "1주 이상 매수"
@@ -346,7 +355,7 @@ def run_bot():
                 msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파\n👉 달러의 30% {buy_mode} 진행!\n\n"
                 should_send = True
 
-        # 1. 명확한 SGOV 파킹 (수량 및 유지 기간 명시)
+        # SGOV 파킹 지시
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
             if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
                 sgov_buy_qty = my_usd / sgov_price
@@ -355,32 +364,39 @@ def run_bot():
                 msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여, 다음 폭락장 전까지 파킹(관망)하세요.\n\n"
                 should_send = True
 
-        # 2. QQQM 과열 리밸런싱
-        if qqqm_rsi > 70 and is_open:
-            if qqqm_current_weight >= (TARGET_WEIGHTS['QQQM'] + 5.0):
+        # 🔥 자동화 3: 과열 리밸런싱 (수익 실현 / 출구 전략) - 코어와 위성 모두 똑같이 통제
+        if is_open:
+            if qld_rsi > 70 and qld_current_weight >= (TARGET_WEIGHTS['QLD'] + 5.0):
+                excess_pct = qld_current_weight - TARGET_WEIGHTS['QLD']
+                excess_usd = total_portfolio_usd * (excess_pct / 100)
+                sell_qty = round(excess_usd / qld_price)
+                sgov_qty_to_buy = round(excess_usd / sgov_price)
+                if sell_qty >= 1:
+                    msg += f"🔴 **[QLD 과열 익절 (위성 수익 실현)]** (RSI {qld_rsi:.1f})\n"
+                    msg += f"• 현재 비중: {qld_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
+                    msg += f"👉 **실행 가이드:** QLD **{sell_qty}주** 매도 수익 확보 후, SGOV **{sgov_qty_to_buy}주** 안전 파킹\n\n"
+                    should_send = True
+
+            elif qqqm_rsi > 70 and qqqm_current_weight >= (TARGET_WEIGHTS['QQQM'] + 5.0) and not should_send:
                 excess_pct = qqqm_current_weight - TARGET_WEIGHTS['QQQM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / qqqm_price)
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
-                
                 if sell_qty >= 1:
                     msg += f"🔴 **[QQQM 과열 리밸런싱]** (RSI {qqqm_rsi:.1f})\n"
                     msg += f"• 현재 비중: {qqqm_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
-                    msg += f"👉 **실행 가이드:** QQQM **{sell_qty}주** 매도 후, 그 달러로 SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
+                    msg += f"👉 **실행 가이드:** QQQM **{sell_qty}주** 매도 후, SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
                     should_send = True
 
-        # 3. SPYM 과열 리밸런싱
-        if spym_rsi > 70 and is_open:
-            if spym_current_weight >= (TARGET_WEIGHTS['SPYM'] + 5.0):
+            elif spym_rsi > 70 and spym_current_weight >= (TARGET_WEIGHTS['SPYM'] + 5.0) and not should_send:
                 excess_pct = spym_current_weight - TARGET_WEIGHTS['SPYM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / spym_price)
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
-                
                 if sell_qty >= 1:
                     msg += f"🔴 **[SPYM 과열 리밸런싱]** (RSI {spym_rsi:.1f})\n"
                     msg += f"• 현재 비중: {spym_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
-                    msg += f"👉 **실행 가이드:** SPYM **{sell_qty}주** 매도 후, 그 달러로 SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
+                    msg += f"👉 **실행 가이드:** SPYM **{sell_qty}주** 매도 후, SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
                     should_send = True
 
         if should_send:
