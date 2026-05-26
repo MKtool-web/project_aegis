@@ -24,8 +24,8 @@ MIN_USD_ACTION = 100
 REVERSE_EX_GAP = 15      
 SPREAD_RATE = 0.009 
 
-# 장기 투자 포트폴리오 목표 비중
-TARGET_WEIGHTS = {'QQQM': 40.0, 'SPYM': 40.0, 'SGOV': 20.0, 'GMMF': 0.0}
+# 🔥 [핵심] 장기 투자 포트폴리오 목표 비중 (QLD 위성 자산 편입)
+TARGET_WEIGHTS = {'QQQM': 30.0, 'SPYM': 30.0, 'SGOV': 20.0, 'QLD': 20.0, 'GMMF': 0.0}
 
 # ==========================================
 # 2. 기본 유틸리티 함수
@@ -164,44 +164,40 @@ def analyze_market(ticker):
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
 # ==========================================
-# 3. 🧠 최신 V26.4 마스터 스코어 (방안 C: 듀얼 필터링 적용)
+# 3. 🧠 최신 V26.5 마스터 스코어 
 # ==========================================
 def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
     
-    # A. 시장 기회 점수 (방안 C: 가짜 폭락 필터링)
     score_A = 0
     if rsi < 50:
-        if vix >= 18: # 시장 전체의 진정한 공포/조정 시에만 RSI 가점 부여
+        if vix >= 18: 
             score_A += (50 - rsi) * 1.5
         else:
-            pass # VIX 평온(18 미만) = 개별 종목 거품 붕괴(노이즈)로 간주하여 무시
+            pass 
 
     if vix > 20: score_A += (vix - 20) * 1.0
     if current_price < ma200: score_A += 20
     score += min(score_A, 60)
     
-    # B. 포트폴리오 밸런스 점수 (허용 오차 밴드 ±5% 적용)
     score_B = 0
     gap = target_weight - current_weight
     if gap > 5.0:  
         score_B += (gap - 5.0) * 2.5
     score += min(score_B, 30)
     
-    # C. 시간 압박 점수 (KST 한국 시간 적용)
     score_C = 0
     kst = pytz.timezone('Asia/Seoul')
     today = datetime.now(kst).day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
     
-    if my_krw >= 600000: # 한 달 치 투자금(약 60만 원) 이상 놀고 있을 때 풀가동
+    if my_krw >= 600000: 
         score_C = days_passed * 1.8
-    elif my_krw >= 100000: # 애매한 금액은 완만한 압박
+    elif my_krw >= 100000: 
         score_C = days_passed * 0.8
         
     score += min(score_C, 50)
     
-    # D. 환율 페널티 점수 (구조적 고환율 MA60 적용)
     score_D = 0
     blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
     
@@ -232,6 +228,8 @@ def run_bot():
         time.sleep(1)
         spym_price, spym_rsi = analyze_market("SPYM")
         time.sleep(1)
+        qld_price, qld_rsi = analyze_market("QLD")
+        time.sleep(1)
         sgov_df = get_market_data_safe("SGOV", "5d")
         sgov_price = sgov_df['Close'].iloc[-1] if not sgov_df.empty else 100.0
         
@@ -259,16 +257,19 @@ def run_bot():
 
         qqqm_qty = current_holdings.get('QQQM', 0)
         spym_qty = current_holdings.get('SPYM', 0)
+        qld_qty  = current_holdings.get('QLD', 0)
         sgov_qty = current_holdings.get('SGOV', 0)
         
         qqqm_value = qqqm_qty * qqqm_price
         spym_value = spym_qty * spym_price
+        qld_value  = qld_qty * qld_price
         sgov_value = sgov_qty * sgov_price
         
-        total_portfolio_usd = qqqm_value + spym_value + sgov_value + my_usd
+        total_portfolio_usd = qqqm_value + spym_value + qld_value + sgov_value + my_usd
         
         qqqm_current_weight = (qqqm_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
         spym_current_weight = (spym_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
+        qld_current_weight  = (qld_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
         sgov_current_weight = (sgov_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
 
         dxy_df = get_market_data_safe("DX-Y.NYB", "1mo")
@@ -286,7 +287,6 @@ def run_bot():
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
 
-        # 텔레그램 발송 시간도 KST 적용 완료
         kst = pytz.timezone('Asia/Seoul')
         msg = f"📡 **[Aegis Smart Strategy]**\n📅 {datetime.now(kst).strftime('%m/%d %H:%M')} ({status_msg})\n💰 잔고: ￦{int(my_krw):,} / ${my_usd:.2f}\n❄️ 배당 스노우볼: ${total_div:.2f}\n📊 지표: VIX {vix:.1f} / Q-RSI {qqqm_rsi:.1f}\n🧠 **AI Score**: QQQM {qqqm_score:.0f}점 | SPYM {spym_score:.0f}점\n\n"
 
@@ -330,16 +330,20 @@ def run_bot():
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
-        # 🔥 방안 C: VIX 기반 가짜 하락(노이즈) 필터링 로직 추가
+        # 🔥 [방안 C + Tactical Strike] QLD 레버리지 줍줍 전략
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
-            if qqqm_rsi < 40 and vix >= 18:
+            if vix >= 25 and qld_rsi < 35:
+                buy_mode = "소수점 매수" if my_usd < qld_price else "1주 이상 매수"
+                msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장)\n👉 위성 자금으로 QLD(레버리지) {buy_mode} 진행!\n\n"
+                should_send = True
+            elif qqqm_rsi < 40 and vix >= 18:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
                 intensity = "30%" if qqqm_rsi >= 30 else "50% (공포매수)"
-                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파 (진짜 공포장)\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
+                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
                 should_send = True
             elif spym_rsi < 40 and vix >= 18: 
                 buy_mode = "소수점 매수" if my_usd < spym_price else "1주 이상 매수"
-                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파 (진짜 공포장)\n👉 달러의 30% {buy_mode} 진행!\n\n"
+                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파\n👉 달러의 30% {buy_mode} 진행!\n\n"
                 should_send = True
 
         # 1. 명확한 SGOV 파킹 (수량 및 유지 기간 명시)
