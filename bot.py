@@ -156,11 +156,12 @@ def get_market_data_safe(ticker, period="2mo"):
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
-            return pd.DataFrame()
+            # 수정: 0이나 빈 값을 반환하지 않고 에러를 던져서 계산을 차단함
+            raise ConnectionError(f"{ticker} 데이터 수신 최종 실패") 
 
 def analyze_market(ticker):
     df = get_market_data_safe(ticker, "2mo")
-    if len(df) < 14: return 0, 50
+    # if len(df) < 14: return 0, 50 (삭제: 위에서 에러로 차단되므로 불필요)
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
 # ==========================================
