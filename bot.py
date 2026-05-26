@@ -221,8 +221,9 @@ def run_bot():
         
         df_stock, df_cash = get_sheet_data()
         
+        # 여기서 통신 에러가 나면 0으로 계산하지 않고 즉시 아래 except ConnectionError 로 빠짐
         vix_df = get_market_data_safe("^VIX", "5d")
-        vix = vix_df['Close'].iloc[-1] if not vix_df.empty else 0
+        vix = vix_df['Close'].iloc[-1]
         time.sleep(1)
         
         qqqm_price, qqqm_rsi = analyze_market("QQQM")
@@ -232,13 +233,12 @@ def run_bot():
         qld_price, qld_rsi = analyze_market("QLD")
         time.sleep(1)
         sgov_df = get_market_data_safe("SGOV", "5d")
-        sgov_price = sgov_df['Close'].iloc[-1] if not sgov_df.empty else 100.0
+        sgov_price = sgov_df['Close'].iloc[-1]
         
         ex_df = get_market_data_safe("KRW=X", "3mo")
-        if ex_df.empty: raise ValueError("환율 데이터 수신 실패")
         curr_rate = ex_df['Close'].iloc[-1]
         ma_20 = ex_df['Close'].tail(20).mean() 
-        krw_ma60 = ex_df['Close'].tail(60).mean() 
+        krw_ma60 = ex_df['Close'].tail(60).mean()
         
         if curr_rate == 0 or qqqm_price == 0: raise ValueError("시장 데이터 수신 실패")
 
@@ -403,6 +403,10 @@ def run_bot():
         if should_send:
             send_telegram(msg)
             
+    except ConnectionError as ce:
+        send_telegram(f"⚠️ **[Aegis API 일시 장애]**\n야후 파이낸스 데이터 수신에 실패했습니다: {str(ce)}\n잘못된 매수를 막기 위해 봇 작동을 일시 중단합니다. 복구 후 재시도 바랍니다.")
+        return 
+        
     except Exception as e:
         send_telegram(f"⚠️ **[Aegis System Error]**\n🔻 에러 내용:\n{str(e)}")
         print(traceback.format_exc())
