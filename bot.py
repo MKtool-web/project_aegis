@@ -24,8 +24,19 @@ MIN_USD_ACTION = 100
 REVERSE_EX_GAP = 15      
 SPREAD_RATE = 0.009 
 
-# 🔥 장기 투자 포트폴리오 목표 비중
-TARGET_WEIGHTS = {'QQQM': 30.0, 'SPYM': 30.0, 'SGOV': 20.0, 'QLD': 20.0, 'GMMF': 0.0}
+# 🔥 기존의 고정 TARGET_WEIGHTS는 삭제하고, 프론트엔드와 동일한 AI 오토파일럿 로직을 장착합니다.
+def get_ai_target_ratios(vix, q_rsi, s_rsi):
+    t_qqqm = 30; t_spym = 30; t_sgov = 40; t_qld = 0
+    
+    # 진성 공포장 (Tactical Strike)
+    if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
+        t_qqqm = 30; t_spym = 30; t_sgov = 20; t_qld = 20
+    # 지수 개편 등으로 인한 과열기 (Profit Take)
+    elif q_rsi > 70 or s_rsi > 70:
+        t_qqqm = 20; t_spym = 20; t_sgov = 60; t_qld = 0
+        
+    return {'QQQM': t_qqqm, 'SPYM': t_spym, 'SGOV': t_sgov, 'QLD': t_qld, 'GMMF': 0.0}
+
 
 # ==========================================
 # 2. 기본 유틸리티 함수
@@ -242,6 +253,9 @@ def run_bot():
         
         if curr_rate == 0 or qqqm_price == 0: raise ValueError("시장 데이터 수신 실패")
 
+        # 🔥 [수정] 실시간 시장 상황(VIX, RSI)을 반영하여 목표 비중을 동적으로 먼저 계산합니다.
+        dynamic_targets = get_ai_target_ratios(vix, qqqm_rsi, spym_rsi)
+
         my_avg_rate = calculate_my_avg_exchange_rate(df_cash, df_stock)
         my_krw, my_usd = calculate_balances(df_cash, df_stock)
         
@@ -285,9 +299,9 @@ def run_bot():
         qld_ma200 = qld_1y['Close'].mean() if len(qld_1y) >= 200 else qld_price
 
         # 🔥 자동화 1: 봇이 모든 종목의 마스터 스코어를 똑같이 계산
-        qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QQQM'], qqqm_current_weight, my_krw)
-        spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['SPYM'], spym_current_weight, my_krw)
-        qld_score = calculate_aegis_master_score("QLD", qld_price, qld_rsi, vix, qld_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, TARGET_WEIGHTS['QLD'], qld_current_weight, my_krw)
+        qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QQQM'], qqqm_current_weight, my_krw)
+        spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['SPYM'], spym_current_weight, my_krw)
+        qld_score = calculate_aegis_master_score("QLD", qld_price, qld_rsi, vix, qld_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QLD'], qld_current_weight, my_krw)
 
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
@@ -358,28 +372,30 @@ def run_bot():
 
         # SGOV 파킹 지시
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
-            if sgov_current_weight < TARGET_WEIGHTS['SGOV']:
+            if sgov_current_weight < dynamic_targets['SGOV']: # 수정
                 sgov_buy_qty = my_usd / sgov_price
                 msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
-                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {TARGET_WEIGHTS['SGOV']:.0f}%)\n"
-                msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여, 다음 폭락장 전까지 파킹(관망)하세요.\n\n"
+                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {dynamic_targets['SGOV']:.0f}%)\n" # 수정
+                msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여 파킹하세요.\n\n"
                 should_send = True
+
+        VOLATILITY_BUFFER = 8.0
 
         # 🔥 자동화 3: 과열 리밸런싱 (수익 실현 / 출구 전략) - 코어와 위성 모두 똑같이 통제
         if is_open:
-            if qld_rsi > 70 and qld_current_weight >= (TARGET_WEIGHTS['QLD'] + 5.0):
-                excess_pct = qld_current_weight - TARGET_WEIGHTS['QLD']
+            if qld_rsi > 70 and qld_current_weight >= (dynamic_targets['QLD'] + VOLATILITY_BUFFER): # 수정
+                excess_pct = qld_current_weight - dynamic_targets['QLD']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / qld_price)
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
                 if sell_qty >= 1:
                     msg += f"🔴 **[QLD 과열 익절 (위성 수익 실현)]** (RSI {qld_rsi:.1f})\n"
                     msg += f"• 현재 비중: {qld_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
-                    msg += f"👉 **실행 가이드:** QLD **{sell_qty}주** 매도 수익 확보 후, SGOV **{sgov_qty_to_buy}주** 안전 파킹\n\n"
+                    msg += f"👉 **실행 가이드:** QLD **{sell_qty}주** 매도 후, SGOV **{sgov_qty_to_buy}주** 안전 파킹\n\n"
                     should_send = True
 
-            elif qqqm_rsi > 70 and qqqm_current_weight >= (TARGET_WEIGHTS['QQQM'] + 5.0) and not should_send:
-                excess_pct = qqqm_current_weight - TARGET_WEIGHTS['QQQM']
+            elif qqqm_rsi > 70 and qqqm_current_weight >= (dynamic_targets['QQQM'] + VOLATILITY_BUFFER) and not should_send: # 수정
+                excess_pct = qqqm_current_weight - dynamic_targets['QQQM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / qqqm_price)
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
@@ -389,8 +405,8 @@ def run_bot():
                     msg += f"👉 **실행 가이드:** QQQM **{sell_qty}주** 매도 후, SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
                     should_send = True
 
-            elif spym_rsi > 70 and spym_current_weight >= (TARGET_WEIGHTS['SPYM'] + 5.0) and not should_send:
-                excess_pct = spym_current_weight - TARGET_WEIGHTS['SPYM']
+            elif spym_rsi > 70 and spym_current_weight >= (dynamic_targets['SPYM'] + VOLATILITY_BUFFER) and not should_send: # 수정
+                excess_pct = spym_current_weight - dynamic_targets['SPYM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / spym_price)
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
