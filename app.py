@@ -84,7 +84,6 @@ def get_vix_data():
         return df['Close'].iloc[-1], df
     except: return 0, pd.DataFrame()
 
-# 🔥 AI 오토파일럿에 QLD(위성 자산) 로직 추가
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
     mode = "Normal"; t_qqqm = 30; t_spym = 30; t_sgov = 40; t_qld = 0
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
@@ -382,6 +381,9 @@ monthly_div, total_div_all = calculate_dividend_analytics(df_stock)
 vix_val, vix_hist = get_vix_data()
 q_price, q_rsi, q_hist = get_market_analysis("QQQM")
 s_price, s_rsi, s_hist = get_market_analysis("SPYM")
+
+# 🔥 시각화 버그 해결 1: QLD 데이터 별도 로드
+qld_price, qld_rsi, qld_hist = get_market_analysis("QLD") 
 gov_price = get_current_price("SGOV")
 
 # ==========================================
@@ -660,7 +662,12 @@ with tab3:
                 ma200 = hist_1y['Close'].mean() if len(hist_1y) >= 200 else get_current_price(row['종목'])
             except: ma200 = get_current_price(row['종목'])
             
-            rsi_val = q_rsi if row['종목'] == 'QQQM' else s_rsi
+            # 🔥 시각화 버그 해결 2: 각 종목에 맞는 정확한 RSI 배정
+            if row['종목'] == 'QQQM': rsi_val = q_rsi
+            elif row['종목'] == 'SPYM': rsi_val = s_rsi
+            elif row['종목'] == 'QLD': rsi_val = qld_rsi
+            else: rsi_val = 50 
+            
             master_score = calculate_aegis_master_score(
                 row['종목'], get_current_price(row['종목']), rsi_val, vix_val, ma200, 
                 krw_rate, my_avg_exchange, krw_ma60, dxy_curr, dxy_ma20, 
@@ -685,7 +692,7 @@ with tab3:
 
 with tab4:
     st.header("📡 AI Market Radar")
-    col_vix, col_qqqm, col_spym = st.columns(3)
+    col_vix, col_qqqm, col_spym, col_qld = st.columns(4)
     vix_delta = vix_val - vix_hist['Close'].iloc[-2] if len(vix_hist) > 1 else 0
     with col_vix:
         st.metric("VIX (공포지수)", f"{vix_val:.2f}", f"{vix_delta:.2f}", delta_color="inverse")
@@ -693,6 +700,9 @@ with tab4:
         st.metric("QQQM RSI", f"{q_rsi:.1f}")
     with col_spym:
         st.metric("SPYM RSI", f"{s_rsi:.1f}")
+    with col_qld:
+        st.metric("QLD RSI", f"{qld_rsi:.1f}")
+        
     if not q_hist.empty:
         q_hist = q_hist.reset_index()
         chart = alt.Chart(q_hist).mark_line().encode(x='Date', y='RSI', tooltip=['Date', 'RSI']).properties(height=300)
