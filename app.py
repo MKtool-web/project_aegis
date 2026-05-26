@@ -42,7 +42,7 @@ def send_test_message():
     except: st.sidebar.error("⚠️ Secrets 설정을 확인하세요.")
 
 # ==========================================
-# 1. 데이터 엔진 & AI 분석 (여기에 함수가 있어야 NameError가 안 남!)
+# 1. 데이터 엔진 & AI 분석
 # ==========================================
 @st.cache_data(ttl=300) 
 def get_current_price(ticker):
@@ -352,6 +352,8 @@ with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
 except: sheet_name = "시트1"
+
+# 🔥 에러 방지 1: df_stock 로딩 실패 시 기본 컬럼 유지
 try:
     df_stock = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0).fillna(0)
     if 'Date' not in df_stock.columns:
@@ -361,7 +363,10 @@ try:
     else:
         df_stock['Date'] = pd.to_datetime(df_stock['Date']).dt.strftime("%Y-%m-%d")
         df_stock = df_stock.sort_values(by="Date", ascending=False)
-except: df_stock = pd.DataFrame()
+except: 
+    df_stock = pd.DataFrame(columns=["Date", "Ticker", "Action", "Qty", "Price", "Exchange_Rate", "Fee"])
+
+# 🔥 에러 방지 2: df_cash 로딩 실패 시 기본 컬럼 유지
 try:
     df_cash = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0).fillna(0)
     if 'Type' not in df_cash.columns:
@@ -369,7 +374,8 @@ try:
         conn.update(spreadsheet=SHEET_URL, worksheet="CashFlow", data=empty_cash)
         df_cash = empty_cash
     else: df_cash['Date'] = pd.to_datetime(df_cash['Date']).dt.strftime("%Y-%m-%d")
-except: df_cash = pd.DataFrame()
+except: 
+    df_cash = pd.DataFrame(columns=["Date", "Type", "Amount_KRW", "Amount_USD", "Ex_Rate"])
 
 my_avg_exchange = calculate_my_avg_exchange_rate(df_cash, df_stock)
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
@@ -611,9 +617,15 @@ with tab2:
         else: st.info("배당 기록 없음")
     with col_log:
         st.subheader("📝 최근 배당 기록")
-        div_logs = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
-        if not div_logs.empty: st.dataframe(div_logs[['Date', 'Ticker', 'Price']].rename(columns={'Price': '세전($)'}), hide_index=True)
-        else: st.caption("기록 없음")
+        # 🔥 에러 방지 3: 'Action' 컬럼이 안전하게 존재하는지 확인 후 필터링
+        if not df_stock.empty and 'Action' in df_stock.columns:
+            div_logs = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
+            if not div_logs.empty: 
+                st.dataframe(div_logs[['Date', 'Ticker', 'Price']].rename(columns={'Price': '세전($)'}), hide_index=True)
+            else: 
+                st.caption("기록 없음")
+        else: 
+            st.caption("기록 없음")
 
 with tab3:
     st.header("⚖️ AI Portfolio Rebalancer & Master Score")
