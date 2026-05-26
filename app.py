@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 기본 설정 & 보안 (Security)
 # ==========================================
-st.set_page_config(page_title="Project Aegis V26.4", layout="wide")
+st.set_page_config(page_title="Project Aegis V26.5", layout="wide")
 
 # 🔒 로그인 시스템
 def check_password():
@@ -84,13 +84,14 @@ def get_vix_data():
         return df['Close'].iloc[-1], df
     except: return 0, pd.DataFrame()
 
+# 🔥 AI 오토파일럿에 QLD(위성 자산) 로직 추가
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
-    mode = "Normal"; t_qqqm = 40; t_spym = 40; t_sgov = 20
+    mode = "Normal"; t_qqqm = 30; t_spym = 30; t_sgov = 40; t_qld = 0
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
-        mode = "Fear (Aggressive Buy)"; t_qqqm = 45; t_spym = 45; t_sgov = 10
+        mode = "Fear (Tactical Strike)"; t_qqqm = 30; t_spym = 30; t_sgov = 20; t_qld = 20
     elif q_rsi > 70 or s_rsi > 70:
-        mode = "Greed (Profit Take)"; t_qqqm = 25; t_spym = 25; t_sgov = 50
-    return t_qqqm, t_spym, t_sgov, mode
+        mode = "Greed (Profit Take)"; t_qqqm = 20; t_spym = 20; t_sgov = 60; t_qld = 0
+    return t_qqqm, t_spym, t_sgov, t_qld, mode
 
 def calculate_wallet_balance_detail(df_stock, df_cash):
     krw_deposit = 0; krw_withdrawn = 0; krw_used_for_usd = 0; krw_gained_from_usd = 0
@@ -257,7 +258,7 @@ def calculate_history(df_stock, df_cash):
     if not df_cash.empty and 'Date' in df_cash.columns: dates.append(pd.to_datetime(df_cash['Date']).min())
     if not dates: return pd.DataFrame()
     start_date = min(dates); end_date = datetime.today(); date_range = pd.date_range(start=start_date, end=end_date)
-    history = []; cum_cash_krw = 0; cum_cash_usd = 0; cum_invested_krw = 0; cum_stock_qty = {'SGOV':0, 'SPYM':0, 'QQQM':0, 'GMMF':0}
+    history = []; cum_cash_krw = 0; cum_cash_usd = 0; cum_invested_krw = 0; cum_stock_qty = {'SGOV':0, 'SPYM':0, 'QQQM':0, 'QLD':0, 'GMMF':0}
     df_s = df_stock.copy()
     if not df_s.empty:
         df_s['Date'] = pd.to_datetime(df_s['Date'])
@@ -282,45 +283,42 @@ def calculate_history(df_stock, df_cash):
                 elif row['Action'] == 'SELL': net_gain = (row['Qty'] * row['Price']) - row['Fee']; cum_cash_usd += net_gain; cum_stock_qty[row['Ticker']] -= row['Qty']
                 elif row['Action'] == 'DIVIDEND': net_div = row['Price'] - row['Fee']; cum_cash_usd += net_div
         history.append({"Date": d, "Total_Invested": cum_invested_krw, "Cash_KRW": cum_cash_krw, "Cash_USD": cum_cash_usd, 
-                        "Stock_SGOV": cum_stock_qty.get('SGOV',0), "Stock_QQQM": cum_stock_qty.get('QQQM',0), "Stock_SPYM": cum_stock_qty.get('SPYM',0), "Stock_GMMF": cum_stock_qty.get('GMMF',0)})
+                        "Stock_SGOV": cum_stock_qty.get('SGOV',0), "Stock_QQQM": cum_stock_qty.get('QQQM',0), "Stock_SPYM": cum_stock_qty.get('SPYM',0), "Stock_QLD": cum_stock_qty.get('QLD',0), "Stock_GMMF": cum_stock_qty.get('GMMF',0)})
     return pd.DataFrame(history)
 
-# 🔥 [방안 C 적용] 최신 V26.4 마스터 스코어 
+# 🔥 [방안 C 적용] 최신 V26.5 마스터 스코어 
 def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw):
     score = 0.0
     
-    # A. 시장 기회 점수 (방안 C: 가짜 폭락 필터링)
     score_A = 0
     if rsi < 50:
-        if vix >= 18: # 시장 전체의 진정한 공포/조정 시에만 RSI 가점 부여
+        if vix >= 18: 
             score_A += (50 - rsi) * 1.5
         else:
-            pass # VIX 평온(18 미만) = 개별 종목 거품 붕괴(노이즈)로 간주하여 무시
+            pass 
 
     if vix > 20: score_A += (vix - 20) * 1.0
     if current_price < ma200: score_A += 20
     score += min(score_A, 60)
     
-    # B. 포트폴리오 밸런스 점수 (허용 오차 밴드 ±5% 적용)
     score_B = 0
     gap = target_weight - current_weight
     if gap > 5.0:  
         score_B += (gap - 5.0) * 2.5
     score += min(score_B, 30)
     
-    # C. 시간 압박 점수 (이월된 현금 연동)
     score_C = 0
-    today = datetime.now().day
+    kst = pytz.timezone('Asia/Seoul')
+    today = datetime.now(kst).day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
     
-    if my_krw >= 600000: # 한 달 치 투자금(약 60만 원) 이상 놀고 있을 때 풀가동
+    if my_krw >= 600000: 
         score_C = days_passed * 1.8
-    elif my_krw >= 100000: # 애매한 금액은 완만한 압박
+    elif my_krw >= 100000: 
         score_C = days_passed * 0.8
         
     score += min(score_C, 50)
     
-    # D. 환율 페널티 점수 (구조적 고환율 MA60 적용)
     score_D = 0
     blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
     
@@ -336,7 +334,7 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
 # ==========================================
 # 3. 로딩 및 메인 UI
 # ==========================================
-st.title("🛡️ Project Aegis V26.4 (Dual Filtering)")
+st.title("🛡️ Project Aegis V26.5 (Tactical Strike)")
 with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
     st.markdown("""
     **Project Aegis**는 매월 일정한 현금 흐름을 바탕으로 우량 ETF를 모아가는 장기 퀀트 시스템입니다.
@@ -344,16 +342,15 @@ with st.expander("📖 Aegis Master Score 작동 원리 (Introduction)"):
 
     * **📈 시장 기회 (Max 60점):** RSI, VIX, 200일 이동평균선을 분석해 시장의 바겐세일 정도를 수치화합니다. (VIX 교차 검증 적용)
     * **⚖️ 포트폴리오 밸런스 (Max 30점):** 설정된 목표 비중 대비 현재 비중이 쪼그라든 종목에 가산점을 부여해 우선 매수합니다.
-    * **⏳ 시간 압박 (Max 50점):** 매월 5일 자본 투입 후, 시간이 지날수록 점수가 상승하여 월말 전 기계적 적립식 매수를 유도합니다. (잉여 현금 기반 작동)
-    * **📉 환율 페널티 (Max -50점):** 현재 환율이 내 평단가나 3개월 평균(고환율 적응)보다 비싸면 점수를 깎습니다. (단, 글로벌 달러 강세 시 페널티 경감)
-    * **🛡️ SGOV 파킹 전략:** 위험 자산의 스코어가 낮을 때는 노는 달러를 안전 자산인 SGOV로 돌려 배당을 챙기며 밸런스를 맞춥니다.
+    * **⏳ 시간 압박 (Max 50점):** 매월 5일 자본 투입 후, 시간이 지날수록 점수가 상승하여 기계적 적립식 매수를 유도합니다.
+    * **📉 환율 페널티 (Max -50점):** 현재 환율이 내 평단가나 3개월 평균(고환율 적응)보다 비싸면 점수를 깎습니다.
+    * **🎯 전술적 타격대(QLD):** 평소엔 방어(SGOV)하다가, 진성 폭락장(VIX 25↑)에만 위성 자금(20%)으로 2배 레버리지를 공격적으로 줍줍합니다.
     """)
 
 sheet_name = "Sheet1"
 try: conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0, usecols=[0])
 except: sheet_name = "시트1"
 
-# 🔥 에러 방지 1: df_stock 로딩 실패 시 기본 컬럼 유지
 try:
     df_stock = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0).fillna(0)
     if 'Date' not in df_stock.columns:
@@ -366,7 +363,6 @@ try:
 except: 
     df_stock = pd.DataFrame(columns=["Date", "Ticker", "Action", "Qty", "Price", "Exchange_Rate", "Fee"])
 
-# 🔥 에러 방지 2: df_cash 로딩 실패 시 기본 컬럼 유지
 try:
     df_cash = conn.read(spreadsheet=SHEET_URL, worksheet="CashFlow", ttl=0).fillna(0)
     if 'Type' not in df_cash.columns:
@@ -400,17 +396,20 @@ st.sidebar.markdown("---")
 with st.sidebar.expander("🎯 포트폴리오 목표 설정", expanded=True):
     use_autopilot = st.toggle("🧠 AI 오토파일럿 모드", value=True)
     if use_autopilot:
-        ai_qqqm, ai_spym, ai_sgov, ai_mode = get_ai_target_ratios(vix_val, q_rsi, s_rsi)
+        ai_qqqm, ai_spym, ai_sgov, ai_qld, ai_mode = get_ai_target_ratios(vix_val, q_rsi, s_rsi)
         st.info(f"🤖 **AI 판단: {ai_mode}**")
         target_qqqm = st.slider("QQQM (성장)", 0, 100, ai_qqqm, disabled=True)
         target_spym = st.slider("SPYM (안정)", 0, 100, ai_spym, disabled=True)
-        target_sgov = st.slider("SGOV (현금성)", 0, 100, ai_sgov, disabled=True)
+        target_sgov = st.slider("SGOV (방어)", 0, 100, ai_sgov, disabled=True)
+        target_qld  = st.slider("QLD (전술위성)", 0, 100, ai_qld, disabled=True)
     else:
         st.caption("수동 설정 모드")
-        target_qqqm = st.slider("QQQM (성장)", 0, 100, 40, 5)
-        target_spym = st.slider("SPYM (안정)", 0, 100, 40, 5)
-        target_sgov = st.slider("SGOV (현금성)", 0, 100, 20, 5)
-    total_target = target_qqqm + target_spym + target_sgov
+        target_qqqm = st.slider("QQQM (성장)", 0, 100, 30, 5)
+        target_spym = st.slider("SPYM (안정)", 0, 100, 30, 5)
+        target_sgov = st.slider("SGOV (방어)", 0, 100, 20, 5)
+        target_qld  = st.slider("QLD (전술위성)", 0, 100, 20, 5)
+        
+    total_target = target_qqqm + target_spym + target_sgov + target_qld
     if total_target != 100: st.error(f"합계: {total_target}%")
     else: st.success("합계: 100%")
 
@@ -476,7 +475,7 @@ elif mode == "역환전/출금":
 
 elif mode == "주식 거래":
     st.sidebar.subheader("📈 주식 매매 & 배당")
-    ticker = st.sidebar.selectbox("종목", ["SGOV", "SPYM", "QQQM", "GMMF"])
+    ticker = st.sidebar.selectbox("종목", ["SGOV", "SPYM", "QQQM", "QLD", "GMMF"])
     action = st.sidebar.selectbox("유형", ["BUY", "SELL", "DIVIDEND"])
     with st.sidebar.form("stock_form"):
         kst = pytz.timezone('Asia/Seoul')
@@ -565,13 +564,15 @@ with tab1:
     p_qqqm = get_current_price("QQQM")
     p_spym = get_current_price("SPYM")
     p_sgov = get_current_price("SGOV")
+    p_qld  = get_current_price("QLD")
     p_gmmf = get_current_price("GMMF")
     
-    t1, t2, t3, t4 = st.columns(4)
+    t1, t2, t3, t4, t5 = st.columns(5)
     t1.metric("QQQM (성장)", f"${p_qqqm:.2f}")
     t2.metric("SPYM (안정)", f"${p_spym:.2f}")
-    t3.metric("SGOV (현금)", f"${p_sgov:.2f}")
-    t4.metric("GMMF (월배당)", f"${p_gmmf:.2f}")
+    t3.metric("QLD (위성)", f"${p_qld:.2f}")
+    t4.metric("SGOV (방어)", f"${p_sgov:.2f}")
+    t5.metric("GMMF (기타)", f"${p_gmmf:.2f}")
     
     st.markdown("---")
     with st.expander("🔍 잔고 상세 보기"):
@@ -607,7 +608,7 @@ with tab2:
     d3.metric("현재 SGOV 가격", f"${gov_price:.2f}")
     st.markdown("---")
     with st.expander("ℹ️ 내 종목 배당 주기 확인하기 (클릭)", expanded=True):
-        st.markdown("* **📅 월배당 (매달):** `SGOV`, `GMMF`\n* **🍂 분기배당 (3,6,9,12월):** `QQQM`, `SPYM`")
+        st.markdown("* **📅 월배당 (매달):** `SGOV`, `GMMF`\n* **🍂 분기배당 (3,6,9,12월):** `QQQM`, `SPYM`, `QLD`")
     col_chart, col_log = st.columns([2, 1])
     with col_chart:
         st.subheader("📊 월별 배당금 추이")
@@ -617,7 +618,6 @@ with tab2:
         else: st.info("배당 기록 없음")
     with col_log:
         st.subheader("📝 최근 배당 기록")
-        # 🔥 에러 방지 3: 'Action' 컬럼이 안전하게 존재하는지 확인 후 필터링
         if not df_stock.empty and 'Action' in df_stock.columns:
             div_logs = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
             if not div_logs.empty: 
@@ -636,7 +636,7 @@ with tab3:
         rebal_df = pd.DataFrame(asset_details)
         total_val = rebal_df['가치'].sum()
         rebal_df['Current_%'] = (rebal_df['가치'] / total_val * 100)
-        targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'GMMF': 0}
+        targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'QLD': target_qld, 'GMMF': 0}
         rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
         
         try:
@@ -716,7 +716,7 @@ with tab6:
         chart_opt = st.radio("그래프 선택", ["보유 수량", "현금 잔고 (KRW vs USD)", "총 투자원금"], horizontal=True, key="history_chart_opt_v2")
         
         if chart_opt == "보유 수량":
-            long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
+            long_df = history_df.melt('Date', value_vars=['Stock_SGOV', 'Stock_QQQM', 'Stock_SPYM', 'Stock_QLD', 'Stock_GMMF'], var_name='Ticker', value_name='Qty')
             c = alt.Chart(long_df).mark_line(point=True).encode(
                 x='Date', 
                 y='Qty', 
