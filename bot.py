@@ -415,7 +415,20 @@ def run_bot():
                     msg += f"• 현재 비중: {spym_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
                     msg += f"👉 **실행 가이드:** SPYM **{sell_qty}주** 매도 후, SGOV **{sgov_qty_to_buy}주** 파킹\n\n"
                     should_send = True
-
+        # 🔥 자동화 4: SGOV 방어 해제 (공격 자금 장전)
+        # 시장이 안정/하락장으로 접어들어 SGOV 목표 비중이 줄어들었을 때, 초과된 SGOV를 팔아 현금을 확보합니다.
+        if is_open:
+            if sgov_current_weight >= (dynamic_targets['SGOV'] + VOLATILITY_BUFFER):
+                excess_pct = sgov_current_weight - dynamic_targets['SGOV']
+                excess_usd = total_portfolio_usd * (excess_pct / 100)
+                sgov_sell_qty = round(excess_usd / sgov_price)
+                
+                if sgov_sell_qty >= 1:
+                    msg += f"⚔️ **[SGOV 방어 해제 (공격 자금 장전)]**\n"
+                    msg += f"• SGOV 비중: {sgov_current_weight:.1f}% (+{excess_pct:.1f}% 초과)\n"
+                    msg += f"👉 **실행 가이드:** 초과된 파킹 자산 SGOV **{sgov_sell_qty}주**를 매도하여 달러($)를 확보하세요. (이 달러는 폭락장 타격에 사용됩니다.)\n\n"
+                    should_send = True
+                    
         if should_send:
             send_telegram(msg)
             
