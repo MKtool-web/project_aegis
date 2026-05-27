@@ -245,6 +245,9 @@ def run_bot():
         time.sleep(1)
         sgov_df = get_market_data_safe("SGOV", "5d")
         sgov_price = sgov_df['Close'].iloc[-1]
+        gmmf_df = get_market_data_safe("GMMF", "5d")
+        gmmf_price = gmmf_df['Close'].iloc[-1] if not gmmf_df.empty else 100.0
+        time.sleep(1)
         
         ex_df = get_market_data_safe("KRW=X", "3mo")
         curr_rate = ex_df['Close'].iloc[-1]
@@ -274,13 +277,15 @@ def run_bot():
         spym_qty = current_holdings.get('SPYM', 0)
         qld_qty  = current_holdings.get('QLD', 0)
         sgov_qty = current_holdings.get('SGOV', 0)
+        gmmf_qty = current_holdings.get('GMMF', 0)
         
         qqqm_value = qqqm_qty * qqqm_price
         spym_value = spym_qty * spym_price
         qld_value  = qld_qty * qld_price
         sgov_value = sgov_qty * sgov_price
+        gmmf_value = gmmf_qty * gmmf_price
         
-        total_portfolio_usd = qqqm_value + spym_value + qld_value + sgov_value + my_usd
+        total_portfolio_usd = qqqm_value + spym_value + qld_value + sgov_value + gmmf_value + my_usd
         
         qqqm_current_weight = (qqqm_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
         spym_current_weight = (spym_value / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
