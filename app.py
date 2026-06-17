@@ -183,7 +183,10 @@ def calculate_my_avg_exchange_rate(df_cash, df_stock):
 
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
-    df = df_stock.copy(); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
+    df = df_stock.copy(); df['Date'] = pd.to_datetime(df['Date'])
+    # 추가: 같은 날짜면 BUY(매수)를 먼저 처리하도록 정렬 (원가 꼬임 방지)
+    df['_order'] = df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
+    df = df.sort_values(by=['Date', '_order'])
     # 추가: 시트에서 온 값을 안전하게 숫자로 변환 (쉼표 제거 + 빈값 처리)
     for col in ['Qty', 'Price', 'Fee', 'Exchange_Rate']:
         if col in df.columns:
@@ -218,7 +221,9 @@ def calculate_tax_loss_harvest(df_stock, krw_rate, realized_profit):
 
     df = df_stock.copy()
     df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values(by='Date')
+    # 추가: 같은 날짜면 BUY(매수)를 먼저 처리하도록 정렬 (원가 꼬임 방지)
+    df['_order'] = df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
+    df = df.sort_values(by=['Date', '_order'])
     for col in ['Qty', 'Price', 'Fee', 'Exchange_Rate']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
