@@ -354,8 +354,10 @@ def run_bot():
 
         sell_diff = real_sell_rate - my_avg_rate
         is_stock_cheap = (qqqm_rsi < 50 or qld_rsi < 50 or vix > 25)
-        
-        if my_usd >= 100 and sell_diff >= REVERSE_EX_GAP and not is_stock_cheap and is_bank_open:
+        is_fx_truly_high = curr_rate > krw_ma60   # 추가: 내 평단이 아니라 '최근 60일 시장 평균'보다도 높을 때만
+
+        if (my_usd >= 100 and sell_diff >= REVERSE_EX_GAP and not is_stock_cheap
+                and is_fx_truly_high and not should_send and is_bank_open):
             msg += f"🇰🇷 **[역환전 기회]**\n• 수수료 떼고도 {sell_diff:+.0f}원 이득!\n👉 달러 일부 원화 환전.\n\n"
             should_send = True
 
