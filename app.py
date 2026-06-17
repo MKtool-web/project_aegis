@@ -659,7 +659,7 @@ with tab3:
             
             try:
                 hist_1y = yf.Ticker(row['종목']).history(period="1y")
-                ma200 = hist_1y['Close'].mean() if len(hist_1y) >= 200 else get_current_price(row['종목'])
+                ma200 = hist_1y['Close'].tail(200).mean() if len(hist_1y) >= 200 else get_current_price(row['종목'])
             except: ma200 = get_current_price(row['종목'])
             
             # 🔥 시각화 버그 해결 2: 각 종목에 맞는 정확한 RSI 배정
