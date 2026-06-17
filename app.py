@@ -210,6 +210,52 @@ def calculate_tax_guard(df_stock):
     return {'realized_profit': realized_profit_krw, 'tax_estimated': max(0, realized_profit_krw - 2500000) * 0.22, 
             'remaining_allowance': max(0, 2500000 - realized_profit_krw), 'log': tax_log}
 
+def calculate_tax_loss_harvest(df_stock, krw_rate, realized_profit):
+    # 보유 종목별 '미실현 손익(원화)'을 계산해서, 절세용 손실 수확 후보를 찾는다
+    result = {'candidates': [], 'total_loss': 0, 'over_threshold': 0, 'tax_saveable': 0}
+    if df_stock.empty:
+        return result
+
+    df = df_stock.copy()
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values(by='Date')
+    for col in ['Qty', 'Price', 'Fee', 'Exchange_Rate']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    # 세금 계산과 동일하게, 환율 0짜리 매수는 제외 (거짓 원가 방지)
+    df = df[~((df['Action'] == 'BUY') & (df['Exchange_Rate'] <= 0))]
+
+    # 종목별로 '지금 남아있는 주식의 원화 매입원가'를 추적
+    holdings = {}
+    for _, row in df.iterrows():
+        t = row['Ticker']
+        if t not in holdings: holdings[t] = {'qty': 0, 'cost_krw': 0}
+        if row['Action'] == 'BUY':
+            holdings[t]['qty'] += row['Qty']
+            holdings[t]['cost_krw'] += (row['Qty'] * row['Price'] * row['Exchange_Rate']) + (row['Fee'] * row['Exchange_Rate'])
+        elif row['Action'] == 'SELL':
+            if holdings[t]['qty'] > 0:
+                avg = holdings[t]['cost_krw'] / holdings[t]['qty']
+                holdings[t]['qty'] -= row['Qty']
+                holdings[t]['cost_krw'] -= avg * row['Qty']
+
+    # 지금 들고 있는 종목 중 '평가손실'인 것만 추려냄
+    for t, h in holdings.items():
+        if h['qty'] > 0.0001:
+            cur_price = get_current_price(t)
+            if cur_price == 0: continue
+            cur_val_krw = cur_price * krw_rate * h['qty']   # 지금 팔면 받는 원화
+            pl = cur_val_krw - h['cost_krw']                # 미실현 손익
+            if pl < 0:
+                result['candidates'].append({'ticker': t, 'qty': h['qty'], 'loss': pl})
+                result['total_loss'] += pl
+
+    over = max(0, realized_profit - 2500000)                # 비과세 한도 초과분
+    result['over_threshold'] = over
+    offsettable = min(abs(result['total_loss']), over)      # 손실로 메울 수 있는 만큼만
+    result['tax_saveable'] = offsettable * 0.22
+    return result
+
 def calculate_dividend_analytics(df_stock):
     if df_stock.empty: return pd.DataFrame(), 0.0
     df_div = df_stock[df_stock['Action'] == 'DIVIDEND'].copy()
@@ -749,6 +795,31 @@ with tab5:
     st.progress(min(1.0, max(0.0, tax_info['realized_profit'] / 2500000)))
     if tax_info['log']:
         for log in tax_info['log']: st.text(log)
+    # 🍂 연말 절세: 손실 수확(Tax-Loss Harvesting) 분석
+    st.markdown("---")
+    st.subheader("🍂 연말 절세: 손실 수확 검토")
+    harvest = calculate_tax_loss_harvest(df_stock, krw_rate, tax_info['realized_profit'])
+    current_month = datetime.now(kst).month
+
+    if harvest['over_threshold'] <= 0:
+        st.info("✅ 올해 실현수익이 아직 비과세 한도(250만원) 안에 있어 손실 수확이 필요 없습니다.")
+    elif not harvest['candidates']:
+        st.info("실현수익이 한도를 넘었지만, 현재 손실 중인 종목이 없어 수확할 손실이 없습니다.")
+    else:
+        if current_month in (11, 12):
+            st.warning(f"⏰ **지금이 손실 수확 적기입니다 (현재 {current_month}월).** 연말까지 아래를 검토하세요.")
+        else:
+            st.info(f"📌 참고용 분석입니다. 실제 손실 수확은 보통 연말(11~12월)에 실행합니다. (현재 {current_month}월)")
+
+        st.write(f"• 올해 비과세 한도 초과분: **{int(harvest['over_threshold']):,}원** (이만큼이 22% 과세 대상)")
+        st.write(f"• 손실 종목으로 상쇄 가능한 손실: **{int(abs(harvest['total_loss'])):,}원**")
+        st.success(f"💰 손실 수확 시 아낄 수 있는 세금(추정): 최대 **{int(harvest['tax_saveable']):,}원**")
+
+        st.caption("손실 중인 종목 (매도하면 이 손실이 올해 수익과 상쇄됩니다):")
+        for c in harvest['candidates']:
+            st.text(f"  - {c['ticker']}: {c['qty']:.2f}주 보유, 평가손실 {int(c['loss']):,}원")
+
+        st.caption("⚠️ 한국 해외주식 손실은 다음 해로 이월되지 않으니, 한도 초과분을 메울 만큼만 수확하는 게 효율적입니다.")
 
 with tab6:
     st.subheader("📈 자산 변화 추이")
