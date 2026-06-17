@@ -88,7 +88,7 @@ def get_vix_data():
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
     mode = "Normal"; t_qqqm = 30; t_spym = 30; t_sgov = 40; t_qld = 0
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
-        mode = "Fear (Tactical Strike)"; t_qqqm = 30; t_spym = 30; t_sgov = 20; t_qld = 20
+        mode = "Fear (Tactical Strike)"; t_qqqm = 27; t_spym = 28; t_sgov = 25; t_qld = 20
     elif q_rsi > 70 or s_rsi > 70:
         mode = "Greed (Profit Take)"; t_qqqm = 20; t_spym = 20; t_sgov = 60; t_qld = 0
     return t_qqqm, t_spym, t_sgov, t_qld, mode
