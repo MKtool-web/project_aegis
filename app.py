@@ -335,6 +335,16 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
         score_D = score_D * 0.5 
         
     score -= min(score_D, 50)
+
+    # 🔥 Score E: 과열 페널티 (비싼 장에서 줍줍 방지)
+    # RSI가 낮은 폭락장에서는 0이라, 공포매수는 그대로 살아있음
+    score_E = 0
+    if rsi > 55:
+        score_E += (rsi - 55) * 1.2          # 예: RSI 70 → (70-55)*1.2 = 18점 차감
+    if current_price > ma200 * 1.10:          # 현재가가 200일선보다 10% 이상 위
+        score_E += 15
+    score -= score_E
+
     return score
 
 # ==========================================
