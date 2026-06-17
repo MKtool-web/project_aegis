@@ -656,8 +656,6 @@ with tab3:
     else: st.caption("수동 목표 비율 설정 모드")
     
     if asset_details:
-        if total_target != 100:
-        st.warning("⚠️ 목표 비중 합계가 100%가 아닙니다. 사이드바에서 100%로 맞춰주세요. (점수 계산은 참고용)")
         rebal_df = pd.DataFrame(asset_details)
         cash_usd_krw = wallet_data['USD'] * krw_rate           # 보유 달러 현금을 원화로 환산
         total_val = rebal_df['가치'].sum() + cash_usd_krw      # 봇과 동일하게 현금까지 분모에 포함
