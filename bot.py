@@ -30,7 +30,7 @@ def get_ai_target_ratios(vix, q_rsi, s_rsi):
     
     # 진성 공포장 (Tactical Strike)
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
-        t_qqqm = 30; t_spym = 30; t_sgov = 20; t_qld = 20
+        t_qqqm = 27; t_spym = 28; t_sgov = 25; t_qld = 20
     # 지수 개편 등으로 인한 과열기 (Profit Take)
     elif q_rsi > 70 or s_rsi > 70:
         t_qqqm = 20; t_spym = 20; t_sgov = 60; t_qld = 0
