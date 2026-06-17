@@ -297,11 +297,11 @@ def run_bot():
         dxy_ma20 = dxy_df['Close'].mean() if not dxy_df.empty else 100
         
         qqqm_1y = get_market_data_safe("QQQM", "1y")
-        qqqm_ma200 = qqqm_1y['Close'].mean() if len(qqqm_1y) >= 200 else qqqm_price
+        qqqm_ma200 = qqqm_1y['Close'].tail(200).mean() if len(qqqm_1y) >= 200 else qqqm_price
         spym_1y = get_market_data_safe("SPYM", "1y")
-        spym_ma200 = spym_1y['Close'].mean() if len(spym_1y) >= 200 else spym_price
+        spym_ma200 = spym_1y['Close'].tail(200).mean() if len(spym_1y) >= 200 else spym_price
         qld_1y = get_market_data_safe("QLD", "1y")
-        qld_ma200 = qld_1y['Close'].mean() if len(qld_1y) >= 200 else qld_price
+        qld_ma200 = qld_1y['Close'].tail(200).mean() if len(qld_1y) >= 200 else qld_price
 
         # 🔥 자동화 1: 봇이 모든 종목의 마스터 스코어를 똑같이 계산
         qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QQQM'], qqqm_current_weight, my_krw)
