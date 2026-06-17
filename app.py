@@ -636,7 +636,8 @@ with tab3:
     
     if asset_details:
         rebal_df = pd.DataFrame(asset_details)
-        total_val = rebal_df['가치'].sum()
+        cash_usd_krw = wallet_data['USD'] * krw_rate           # 보유 달러 현금을 원화로 환산
+        total_val = rebal_df['가치'].sum() + cash_usd_krw      # 봇과 동일하게 현금까지 분모에 포함
         rebal_df['Current_%'] = (rebal_df['가치'] / total_val * 100)
         targets = {'QQQM': target_qqqm, 'SPYM': target_spym, 'SGOV': target_sgov, 'QLD': target_qld, 'GMMF': 0}
         rebal_df['Target_%'] = rebal_df['종목'].map(targets).fillna(0)
