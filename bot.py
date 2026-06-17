@@ -175,6 +175,21 @@ def analyze_market(ticker):
     # if len(df) < 14: return 0, 50 (삭제: 위에서 에러로 차단되므로 불필요)
     return df['Close'].iloc[-1], ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
 
+def calc_buyable(usd_budget, price):
+    # 주어진 달러 예산으로 살 수 있는 주식 수를 '온전한 정수 주'와 '소수점 포함'으로 계산
+    if price <= 0: return 0, 0.0
+    whole = int(usd_budget // price)        # 1주 단위로 살 수 있는 최대 정수
+    fractional = usd_budget / price         # 소수점까지 포함한 수량
+    return whole, fractional
+
+def buy_guide(usd_budget, price, ticker):
+    # 알림에 넣을 '정확한 매수 안내 문구'를 만든다
+    whole, frac = calc_buyable(usd_budget, price)
+    if whole >= 1:
+        return f"💵 예산 ${usd_budget:.2f} → **{ticker} {whole}주** 매수 가능 (1주 ${price:.2f}, 소수점 포함 시 {frac:.2f}주)"
+    else:
+        return f"💵 예산 ${usd_budget:.2f} → {ticker} 1주(${price:.2f})에 못 미침. **소수점 {frac:.2f}주** 매수"
+
 # ==========================================
 # 3. 🧠 최신 V26.5 마스터 스코어 (단일 통제 시스템)
 # ==========================================
@@ -344,8 +359,9 @@ def run_bot():
                 msg += f"👉 추천: {int(amount_to_exchange):,}원 환전 후 **{target_ticker} 매수**\n\n"
                 should_send = True
             elif my_usd >= MIN_USD_ACTION and is_open:
-                buy_mode = f"달러의 {pacing_ratio*100:.0f}% 투입"
-                msg += f"📈 **[전략적 긴급 매수]** 최고점({max_score:.0f}점) 돌파!\n👉 추천: {buy_mode}하여 **{target_ticker} 매수**\n\n"
+                budget = my_usd * pacing_ratio
+                target_price = {'QQQM': qqqm_price, 'SPYM': spym_price, 'QLD': qld_price}[target_ticker]
+                msg += f"📈 **[전략적 긴급 매수]** 최고점({max_score:.0f}점) 돌파!\n👉 달러의 {pacing_ratio*100:.0f}% 투입\n{buy_guide(budget, target_price, target_ticker)}\n\n"
                 should_send = True
 
         buy_diff = real_buy_rate - my_avg_rate
@@ -378,41 +394,39 @@ def run_bot():
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
             trend_note = "\n📉 하락 추세(200일선 아래): 강도 절반으로 분할 진입" if is_downtrend else ""
             if vix >= 25 and qld_rsi < 35:
-                buy_mode = "소수점 매수" if my_usd < qld_price else "1주 이상 매수"
                 qld_pct = 50   # QLD는 위성 공격 자산이므로 추세와 무관하게 항상 공격적으로
-                msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장){trend_note}\n👉 위성 자금의 {qld_pct}%로 QLD(레버리지) {buy_mode} 진행!\n\n"
+                budget = my_usd * (qld_pct / 100)
+                msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장){trend_note}\n👉 위성 자금의 {qld_pct}% 투입\n{buy_guide(budget, qld_price, 'QLD')}\n\n"
                 should_send = True
             elif qqqm_rsi < 40 and vix >= 18:
-                buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
                 base_pct = 30 if qqqm_rsi >= 30 else 50
                 final_pct = int(base_pct * trend_factor)
                 label = "공포매수" if qqqm_rsi < 30 else ""
-                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {final_pct}% {label} {buy_mode} 진행!\n\n"
+                budget = my_usd * (final_pct / 100)
+                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {final_pct}% {label} 투입\n{buy_guide(budget, qqqm_price, 'QQQM')}\n\n"
                 should_send = True
             elif spym_rsi < 40 and vix >= 18: 
-                buy_mode = "소수점 매수" if my_usd < spym_price else "1주 이상 매수"
                 spym_pct = int(30 * trend_factor)
-                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {spym_pct}% {buy_mode} 진행!\n\n"
+                budget = my_usd * (spym_pct / 100)
+                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {spym_pct}% 투입\n{buy_guide(budget, spym_price, 'SPYM')}\n\n"
                 should_send = True
                 
         # 🔥 현금 천장: 달러 현금이 포트폴리오의 일정 비율을 넘으면 경고 (현금이 노는 것 방지)
-        CASH_CEILING_PCT = 35.0   # 달러 현금이 전체의 25%를 넘으면 과다로 판단
+        CASH_CEILING_PCT = 35.0   # 달러 현금이 전체의 35%를 넘으면 과다로 판단
         usd_cash_weight = (my_usd / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
 
         # SGOV 파킹 지시 (기존 조건 + 현금 천장 초과 시에도 발동)
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
             if usd_cash_weight > CASH_CEILING_PCT:
-                sgov_buy_qty = my_usd / sgov_price
                 msg += f"💰 **[현금 과다 경고: SGOV 파킹 권장]**\n"
                 msg += f"• 달러 현금 비중: {usd_cash_weight:.1f}% (천장 {CASH_CEILING_PCT:.0f}% 초과)\n"
                 msg += f"• 비싼 장이 길어지며 현금이 놀고 있습니다. 이자라도 받게 파킹을 권합니다.\n"
-                msg += f"👉 남는 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주** 매수 파킹\n\n"
+                msg += f"👉 남는 달러 전액 파킹\n{buy_guide(my_usd, sgov_price, 'SGOV')}\n\n"
                 should_send = True
             elif sgov_current_weight < dynamic_targets['SGOV']:
-                sgov_buy_qty = my_usd / sgov_price
                 msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
                 msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {dynamic_targets['SGOV']:.0f}%)\n"
-                msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여 파킹하세요.\n\n"
+                msg += f"👉 남은 달러 전액 파킹\n{buy_guide(my_usd, sgov_price, 'SGOV')}\n\n"
                 should_send = True
 
         VOLATILITY_BUFFER = 8.0
@@ -423,6 +437,7 @@ def run_bot():
                 excess_pct = qld_current_weight - dynamic_targets['QLD']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / qld_price)
+                sell_qty = min(sell_qty, int(qld_qty))   # 추가: 실제 보유 수량을 넘지 않게 제한
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
                 if sell_qty >= 1:
                     msg += f"🔴 **[QLD 과열 익절 (위성 수익 실현)]** (RSI {qld_rsi:.1f})\n"
@@ -434,6 +449,7 @@ def run_bot():
                 excess_pct = qqqm_current_weight - dynamic_targets['QQQM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / qqqm_price)
+                sell_qty = min(sell_qty, int(qqqm_qty))   # 추가: 실제 보유 수량을 넘지 않게 제한
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
                 if sell_qty >= 1:
                     msg += f"🔴 **[QQQM 과열 리밸런싱]** (RSI {qqqm_rsi:.1f})\n"
@@ -445,6 +461,7 @@ def run_bot():
                 excess_pct = spym_current_weight - dynamic_targets['SPYM']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sell_qty = round(excess_usd / spym_price)
+                sell_qty = min(sell_qty, int(spym_qty))   # 추가: 실제 보유 수량을 넘지 않게 제한
                 sgov_qty_to_buy = round(excess_usd / sgov_price)
                 if sell_qty >= 1:
                     msg += f"🔴 **[SPYM 과열 리밸런싱]** (RSI {spym_rsi:.1f})\n"
@@ -458,6 +475,7 @@ def run_bot():
                 excess_pct = sgov_current_weight - dynamic_targets['SGOV']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sgov_sell_qty = round(excess_usd / sgov_price)
+                sgov_sell_qty = min(sgov_sell_qty, int(sgov_qty))   # 추가: 실제 보유 수량을 넘지 않게 제한
                 
                 if sgov_sell_qty >= 1:
                     msg += f"⚔️ **[SGOV 방어 해제 (공격 자금 장전)]**\n"
