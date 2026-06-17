@@ -65,8 +65,9 @@ def get_usd_krw():
                 time.sleep(1.0) 
                 continue
             else:
-                st.cache_data.clear()
-                return 1450.0
+                st.warning("⚠️ 실시간 환율을 못 불러왔습니다. 잠시 후 새로고침 해주세요. (임시 1450원 적용 중)")
+                # 1450을 캐시에 굳히지 않도록, 예외를 던져 캐시 저장 자체를 막음
+                raise RuntimeError("FX fetch failed")
 
 @st.cache_data(ttl=300)
 def get_market_analysis(ticker):
@@ -183,6 +184,12 @@ def calculate_my_avg_exchange_rate(df_cash, df_stock):
 def calculate_tax_guard(df_stock):
     if df_stock.empty: return {'realized_profit': 0, 'tax_estimated': 0, 'log': [], 'remaining_allowance': 2500000}
     df = df_stock.copy(); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
+    # 추가: 시트에서 온 값을 안전하게 숫자로 변환 (쉼표 제거 + 빈값 처리)
+    for col in ['Qty', 'Price', 'Fee', 'Exchange_Rate']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    # 추가: 환율이 0인 매수 기록은 세금 계산에서 제외 (거짓 폭탄 방지)
+    df = df[~((df['Action'] == 'BUY') & (df['Exchange_Rate'] <= 0))]
     kst = pytz.timezone('Asia/Seoul')
     holdings = {}; current_year = datetime.now(kst).year; realized_profit_krw = 0; tax_log = []
     for _, row in df.iterrows():
@@ -375,7 +382,10 @@ except:
 my_avg_exchange = calculate_my_avg_exchange_rate(df_cash, df_stock)
 wallet_data = calculate_wallet_balance_detail(df_stock, df_cash)
 tax_info = calculate_tax_guard(df_stock)
-krw_rate = get_usd_krw()
+try:
+    krw_rate = get_usd_krw()
+except Exception:
+    krw_rate = 1450.0   # 실패해도 화면은 떠야 하므로 임시값, 단 캐시엔 저장 안 됨
 monthly_div, total_div_all = calculate_dividend_analytics(df_stock)
 
 vix_val, vix_hist = get_vix_data()
@@ -499,8 +509,17 @@ elif mode == "주식 거래":
                     st.success("✅ 매수 완료"); time.sleep(1); st.rerun()
                 else: st.error("❌ 달러 부족!")
             elif action == "SELL":
-                log_stock_trade(date, ticker, action, qty, price, rate, fee)
-                st.success("✅ 매도 완료"); time.sleep(1); st.rerun()
+                held_qty = current_holdings.get(ticker, 0) if 'current_holdings' in dir() else None
+                # current_holdings가 아직 계산 전이면 직접 계산
+                _df = df_stock.copy()
+                _df['Qty'] = pd.to_numeric(_df['Qty'], errors='coerce').fillna(0)
+                _held = (_df[(_df['Ticker']==ticker)&(_df['Action']=='BUY')]['Qty'].sum()
+                         - _df[(_df['Ticker']==ticker)&(_df['Action']=='SELL')]['Qty'].sum())
+                if qty <= _held:
+                    log_stock_trade(date, ticker, action, qty, price, rate, fee)
+                    st.success("✅ 매도 완료"); time.sleep(1); st.rerun()
+                else:
+                    st.error(f"❌ 보유 수량({_held:.2f}주)보다 많이 팔 수 없습니다.")
             elif action == "DIVIDEND":
                 log_stock_trade(date, ticker, action, 1.0, price, rate, fee)
                 st.success("💰 배당금 입금"); time.sleep(1); st.rerun()
@@ -637,6 +656,8 @@ with tab3:
     else: st.caption("수동 목표 비율 설정 모드")
     
     if asset_details:
+        if total_target != 100:
+        st.warning("⚠️ 목표 비중 합계가 100%가 아닙니다. 사이드바에서 100%로 맞춰주세요. (점수 계산은 참고용)")
         rebal_df = pd.DataFrame(asset_details)
         cash_usd_krw = wallet_data['USD'] * krw_rate           # 보유 달러 현금을 원화로 환산
         total_val = rebal_df['가치'].sum() + cash_usd_krw      # 봇과 동일하게 현금까지 분모에 포함
