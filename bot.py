@@ -326,6 +326,10 @@ def run_bot():
         should_send = False
         pacing_ratio = 0.3 if vix > 30 else 1.0
 
+        # 🔥 추세 필터: 핵심 지수(QQQM)가 200일선 아래면 하락 추세로 보고 매수를 더 잘게 분할
+        is_downtrend = qqqm_price < qqqm_ma200
+        trend_factor = 0.5 if is_downtrend else 1.0   # 하락 추세면 매수 강도를 절반으로
+
         # 🔥 자동화 2: 100점 돌파 시 봇이 3개 종목을 경쟁시켜 가장 저평가된 1개만 매수 지시
         scores = {'QQQM': qqqm_score, 'SPYM': spym_score, 'QLD': qld_score}
         max_ticker = max(scores, key=scores.get)
@@ -372,26 +376,42 @@ def run_bot():
 
         # 🔥 진성 폭락장 직관적 매수 지시 (VIX 트리거)
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
+            trend_note = "\n📉 하락 추세(200일선 아래): 강도 절반으로 분할 진입" if is_downtrend else ""
             if vix >= 25 and qld_rsi < 35:
                 buy_mode = "소수점 매수" if my_usd < qld_price else "1주 이상 매수"
-                msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장)\n👉 위성 자금으로 QLD(레버리지) {buy_mode} 진행!\n\n"
+                qld_pct = 50   # QLD는 위성 공격 자산이므로 추세와 무관하게 항상 공격적으로
+                msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장){trend_note}\n👉 위성 자금의 {qld_pct}%로 QLD(레버리지) {buy_mode} 진행!\n\n"
                 should_send = True
             elif qqqm_rsi < 40 and vix >= 18:
                 buy_mode = "소수점 매수" if my_usd < qqqm_price else "1주 이상 매수"
-                intensity = "30%" if qqqm_rsi >= 30 else "50% (공포매수)"
-                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파\n👉 달러의 {intensity} {buy_mode} 진행!\n\n"
+                base_pct = 30 if qqqm_rsi >= 30 else 50
+                final_pct = int(base_pct * trend_factor)
+                label = "공포매수" if qqqm_rsi < 30 else ""
+                msg += f"📈 **[진성 하락장: QQQM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {final_pct}% {label} {buy_mode} 진행!\n\n"
                 should_send = True
             elif spym_rsi < 40 and vix >= 18: 
                 buy_mode = "소수점 매수" if my_usd < spym_price else "1주 이상 매수"
-                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파\n👉 달러의 30% {buy_mode} 진행!\n\n"
+                spym_pct = int(30 * trend_factor)
+                msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {spym_pct}% {buy_mode} 진행!\n\n"
                 should_send = True
+                
+        # 🔥 현금 천장: 달러 현금이 포트폴리오의 일정 비율을 넘으면 경고 (현금이 노는 것 방지)
+        CASH_CEILING_PCT = 35.0   # 달러 현금이 전체의 25%를 넘으면 과다로 판단
+        usd_cash_weight = (my_usd / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
 
-        # SGOV 파킹 지시
+        # SGOV 파킹 지시 (기존 조건 + 현금 천장 초과 시에도 발동)
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
-            if sgov_current_weight < dynamic_targets['SGOV']: # 수정
+            if usd_cash_weight > CASH_CEILING_PCT:
+                sgov_buy_qty = my_usd / sgov_price
+                msg += f"💰 **[현금 과다 경고: SGOV 파킹 권장]**\n"
+                msg += f"• 달러 현금 비중: {usd_cash_weight:.1f}% (천장 {CASH_CEILING_PCT:.0f}% 초과)\n"
+                msg += f"• 비싼 장이 길어지며 현금이 놀고 있습니다. 이자라도 받게 파킹을 권합니다.\n"
+                msg += f"👉 남는 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주** 매수 파킹\n\n"
+                should_send = True
+            elif sgov_current_weight < dynamic_targets['SGOV']:
                 sgov_buy_qty = my_usd / sgov_price
                 msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
-                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {dynamic_targets['SGOV']:.0f}%)\n" # 수정
+                msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {dynamic_targets['SGOV']:.0f}%)\n"
                 msg += f"👉 남은 달러(${my_usd:.2f})로 SGOV 약 **{sgov_buy_qty:.2f}주**를 매수하여 파킹하세요.\n\n"
                 should_send = True
 
