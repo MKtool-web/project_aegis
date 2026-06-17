@@ -570,7 +570,6 @@ elif mode == "주식 거래":
                     st.success("✅ 매수 완료"); time.sleep(1); st.rerun()
                 else: st.error("❌ 달러 부족!")
             elif action == "SELL":
-                held_qty = current_holdings.get(ticker, 0) if 'current_holdings' in dir() else None
                 # current_holdings가 아직 계산 전이면 직접 계산
                 _df = df_stock.copy()
                 _df['Qty'] = pd.to_numeric(_df['Qty'], errors='coerce').fillna(0)
