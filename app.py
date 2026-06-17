@@ -529,7 +529,9 @@ if not df_stock.empty and 'Action' in df_stock.columns:
     for t, q in current_holdings.items():
         if q > 0:
             p = get_current_price(t)
-            if p == 0: p = 100.0
+            if p == 0:
+                st.warning(f"⚠️ {t} 가격을 못 불러왔습니다. 이 종목은 자산 계산에서 잠시 제외합니다.")
+                continue
             val_krw = q * p * krw_rate
             total_stock_val_krw += val_krw
             asset_details.append({"종목": t, "가치": val_krw, "수량": q})
