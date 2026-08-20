@@ -182,6 +182,18 @@ def calc_buyable(usd_budget, price):
     fractional = usd_budget / price         # 소수점까지 포함한 수량
     return whole, fractional
 
+def get_fx_trend(ex_df):
+    """환율 추세 판정: '떨어지는 칼날'과 '바닥 다지기'를 구분"""
+    curr = ex_df['Close'].iloc[-1]
+    ma5  = ex_df['Close'].tail(5).mean()
+    ma20 = ex_df['Close'].tail(20).mean()
+    ma60 = ex_df['Close'].tail(60).mean()
+    is_downtrend = (ma5 < ma20 < ma60)
+    recent = ex_df['Close'].tail(5)
+    is_stabilizing = (recent.max() - recent.min()) < (curr * 0.005)
+    return {'ma20': ma20, 'ma60': ma60,
+            'downtrend': is_downtrend, 'stabilizing': is_stabilizing}
+    
 def buy_guide(usd_budget, price, ticker):
     # 알림에 넣을 '정확한 매수 안내 문구'를 만든다
     whole, frac = calc_buyable(usd_budget, price)
@@ -226,16 +238,21 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
     score += min(score_C, 50)
     
     score_D = 0
-    blended_base_rate = (my_avg_rate * 0.3) + (krw_ma60 * 0.7) 
-    
-    if curr_rate > blended_base_rate: 
+    blended_base_rate = (my_avg_rate * 0.15) + (krw_ma60 * 0.85)
+
+    if curr_rate > blended_base_rate:
         score_D += (curr_rate - blended_base_rate) * 0.5
-        
-    if dxy_curr > dxy_ma20: 
-        score_D = score_D * 0.5 
-        
+
+    if dxy_curr > dxy_ma20:
+        score_D = score_D * 0.5
+
     score -= min(score_D, 50)
 
+    # 🔥 Score F: 저환율 보너스 (상한 15점)
+    score_F = 0
+    if curr_rate < blended_base_rate:
+        score_F = min((blended_base_rate - curr_rate) * 0.25, 15)
+    score += score_F
     # 🔥 Score E: 과열 페널티 (비싼 장에서 줍줍 방지)
     # RSI가 낮은 폭락장에서는 0이라, 공포매수는 그대로 살아있음
     score_E = 0
@@ -364,18 +381,27 @@ def run_bot():
                 msg += f"📈 **[전략적 긴급 매수]** 최고점({max_score:.0f}점) 돌파!\n👉 달러의 {pacing_ratio*100:.0f}% 투입\n{buy_guide(budget, target_price, target_ticker)}\n\n"
                 should_send = True
 
-        buy_diff = real_buy_rate - my_avg_rate
-        is_cheap_historically = curr_rate < (ma_20 - 5.0)
+        fx = get_fx_trend(ex_df)
+        gap_vs_ma60 = real_buy_rate - fx['ma60']
 
-        if my_krw >= MIN_KRW_ACTION and is_bank_open and not should_send: 
+        if my_krw >= MIN_KRW_ACTION and is_bank_open and not should_send:
             suggest_percent = 0
             strategy_msg = ""
-            if -15 < buy_diff <= -5: suggest_percent = 30; strategy_msg = "📉 환율 소폭 하락."
-            elif -30 < buy_diff <= -15: suggest_percent = 50; strategy_msg = "📉📉 환율 매력적!"
-            elif buy_diff <= -30: suggest_percent = 100; strategy_msg = "💎 [바겐세일] 역대급 환율!"
-            elif buy_diff > -5 and is_cheap_historically:
-                suggest_percent = 30; strategy_msg = f"🌊 [물결 타기] 평단보단 높지만,\n최근 평균({ma_20:,.0f}원)보다 저렴합니다."
-                
+            if   gap_vs_ma60 <= -30: suggest_percent = 60; strategy_msg = "💎 60일 평균 대비 크게 저렴"
+            elif gap_vs_ma60 <= -15: suggest_percent = 40; strategy_msg = "📉📉 시장 평균 대비 매력적"
+            elif gap_vs_ma60 <=  -5: suggest_percent = 25; strategy_msg = "📉 소폭 저렴"
+
+            if suggest_percent > 0:
+                if fx['downtrend'] and not fx['stabilizing']:
+                    suggest_percent = int(suggest_percent * 0.5)
+                    strategy_msg += "\n⚠️ 하락 추세 진행 중 → 강도 절반 분할"
+                elif fx['stabilizing']:
+                    strategy_msg += "\n✅ 5일 변동 축소(바닥 다지기) → 정상 강도"
+
+            if 0 < my_krw <= 300000 and suggest_percent > 0:
+                suggest_percent = 100
+                strategy_msg += "\n💡 잔액 소액 → 분할 실익 없어 전액 집행"
+
             if suggest_percent > 0:
                 amount_to_exchange = my_krw * (suggest_percent / 100)
                 msg += f"💵 **[환전 추천]** (예상 {real_buy_rate:,.0f}원)\n{strategy_msg}\n👉 추천: {int(amount_to_exchange):,}원\n\n"
