@@ -420,7 +420,7 @@ def run_bot():
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
             trend_note = "\n📉 하락 추세(200일선 아래): 강도 절반으로 분할 진입" if is_downtrend else ""
             if vix >= 25 and qld_rsi < 35:
-                qld_pct = 50   # QLD는 위성 공격 자산이므로 추세와 무관하게 항상 공격적으로
+                qld_pct = 25 if is_downtrend else 50
                 budget = my_usd * (qld_pct / 100)
                 msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장){trend_note}\n👉 위성 자금의 {qld_pct}% 투입\n{buy_guide(budget, qld_price, 'QLD')}\n\n"
                 should_send = True
