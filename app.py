@@ -434,20 +434,7 @@ def bt_parse_schedule(text):
         except: continue
     return sched
 
-def bt_make_schedule(start_ym, on_months, off_months, amount, cycles):
-    """4달 투자 → 2달 휴식 같은 불규칙 패턴 생성기"""
-    lines = []
-    cur = pd.Timestamp(start_ym + '-01')
-    for _ in range(cycles):
-        for _ in range(on_months):
-            lines.append(f"{cur.strftime('%Y-%m')}={int(amount)}")
-            cur += pd.DateOffset(months=1)
-        for _ in range(off_months):
-            lines.append(f"{cur.strftime('%Y-%m')}=0")
-            cur += pd.DateOffset(months=1)
-    return "\n".join(lines)
-
-def bt_run(df, sched, threshold, spread, target_w):
+def bt_run(df, sched, threshold, spread, target_w, panic_dd=0.20):
     inject = {}
     for ym, amt in sched.items():
         if amt <= 0: continue
@@ -456,56 +443,80 @@ def bt_run(df, sched, threshold, spread, target_w):
         fut = df.index[df.index >= t]
         if len(fut): inject[fut[0]] = inject.get(fut[0], 0) + amt
 
-    def blank(): return {'krw':0.0,'sh':0.0,'ex_krw':0.0,'ex_usd':0.0,'buys':0}
-    A, B = blank(), blank()
-    hist, idle_days, total_days = [], 0, 0
+    def blank():
+        return {'krw':0.0,'sh':0.0,'ex_krw':0.0,'ex_usd':0.0,'buys':0,
+                'tot_in':0.0,'dip_in':0.0,'panic':0,'halted':False,'resume_px':0.0}
+    A, B, C = blank(), blank(), blank()
+    hist, idle_days, total_days, peakC = [], 0, 0, 0.0
 
-    def deploy(P, rate, price):
+    def deploy(P, rate, price, vix):
         if P['krw'] <= 0: return
-        usd = P['krw'] / (rate * (1 + spread))
-        P['ex_krw'] += P['krw']; P['ex_usd'] += usd
+        amt = P['krw']
+        usd = amt / (rate * (1 + spread))
+        P['ex_krw'] += amt; P['ex_usd'] += usd
+        P['tot_in'] += amt
+        if vix >= 25: P['dip_in'] += amt
         P['sh'] += usd / price
         P['krw'] = 0.0; P['buys'] += 1
 
     for d, r in df.iterrows():
         if d in inject:
-            A['krw'] += inject[d]; B['krw'] += inject[d]
+            for P in (A, B, C): P['krw'] += inject[d]
 
-        deploy(A, r['FX'], r['P'])   # 전략A: 들어온 날 바로 전량 매수
+        # 전략A: 들어온 날 즉시 전량 매수
+        deploy(A, r['FX'], r['P'], r['VIX'])
 
+        # 전략B: Aegis 점수가 임계점을 넘을 때만 매수
         if B['krw'] > 0:
             my_avg = (B['ex_krw']/B['ex_usd']) if B['ex_usd'] > 0 else r['FX']
-            b_stock_krw = B['sh'] * r['P'] * r['FX']
-            b_total = b_stock_krw + B['krw']
-            cur_w = (b_stock_krw / b_total * 100) if b_total > 0 else 0.0
+            b_stock = B['sh'] * r['P'] * r['FX']
+            b_tot = b_stock + B['krw']
+            cur_w = (b_stock / b_tot * 100) if b_tot > 0 else 0.0
             sc = calculate_aegis_master_score(
                 'BT', r['P'], r['RSI'], r['VIX'], r['MA200'], r['FX'], my_avg,
                 r['FX_MA60'], r['DXY'], r['DXY_MA20'],
                 target_w, cur_w, B['krw'], sim_day=int(d.day))
             if sc >= threshold:
-                deploy(B, r['FX'], r['P'])
+                deploy(B, r['FX'], r['P'], r['VIX'])
+
+        # 전략C: 규칙 없는 인간 — 고점 대비 크게 빠지면 공포 매도, 회복하면 재진입
+        if not C['halted']:
+            deploy(C, r['FX'], r['P'], r['VIX'])
+            eqC = C['sh']*r['P']*r['FX'] + C['krw']
+            peakC = max(peakC, eqC)
+            if C['sh'] > 0 and peakC > 0 and eqC < peakC * (1 - panic_dd):
+                C['krw'] += C['sh'] * r['P'] * r['FX'] * (1 - spread)
+                C['sh'] = 0.0; C['halted'] = True
+                C['resume_px'] = r['P']; C['panic'] += 1
+                C['ex_krw'] = 0.0; C['ex_usd'] = 0.0
+        else:
+            if r['P'] >= C['resume_px']:
+                C['halted'] = False
+                deploy(C, r['FX'], r['P'], r['VIX'])
+            peakC = max(peakC, C['sh']*r['P']*r['FX'] + C['krw'])
 
         total_days += 1
         if B['krw'] > 0: idle_days += 1
         hist.append({'Date': d,
                      'A': A['sh']*r['P']*r['FX'] + A['krw'],
-                     'B': B['sh']*r['P']*r['FX'] + B['krw']})
+                     'B': B['sh']*r['P']*r['FX'] + B['krw'],
+                     'C': C['sh']*r['P']*r['FX'] + C['krw']})
 
     h = pd.DataFrame(hist).set_index('Date')
     paid = sum(inject.values())
 
     def stats(P, col):
-        eq = h[col]
-        cm = eq.cummax()
+        eq = h[col]; cm = eq.cummax()
         mdd = ((eq - cm) / cm.where(cm > 0)).min()
         return {'최종 평가액': eq.iloc[-1],
                 '수익률(%)': (eq.iloc[-1]/paid - 1)*100 if paid else 0,
                 '평균 환율': (P['ex_krw']/P['ex_usd']) if P['ex_usd'] else 0,
-                '평균 매수단가($)': (P['ex_usd']/P['sh']) if P['sh'] else 0,
                 '매수 횟수': P['buys'],
+                '폭락장 매수 비중(%)': (P['dip_in']/P['tot_in']*100) if P['tot_in'] else 0,
                 'MDD(%)': (mdd*100) if pd.notna(mdd) else 0}
 
-    return h, paid, stats(A,'A'), stats(B,'B'), (idle_days/total_days*100 if total_days else 0)
+    return (h, paid, stats(A,'A'), stats(B,'B'), stats(C,'C'),
+            (idle_days/total_days*100 if total_days else 0), C['panic'])
 
 # ==========================================
 # 📖 가이드 팝업 (Strategy Guide Dialog)
@@ -1068,50 +1079,51 @@ with tab8:
     st.header("🧪 Aegis 엔진 검증")
     st.caption("같은 돈을 같은 날 넣었을 때, 점수 엔진이 '아무 생각 없는 적립식'을 이기는지 비교합니다.")
 
-    bc1, bc2, bc3 = st.columns(3)
+    bc1, bc2, bc3, bc4 = st.columns(4)
     proxy = bc1.selectbox("기준 종목", ["QQQ", "QQQM", "SPY", "QLD"],
                           help="QQQM은 2020년 10월 상장이라 기간이 짧습니다. 장기 검증은 QQQ 권장.")
     bt_start = bc2.date_input("시작일", pd.Timestamp("2019-01-01").date(), key="bt_s")
     threshold = bc3.number_input("매수 임계점", value=100, step=5, key="bt_th")
+    panic_dd = bc4.number_input("공포 매도 기준(-%)", value=20, min_value=5, max_value=50,
+                                step=5, key="bt_pd",
+                                help="전략C가 '못 참고 파는' 하락률. 20이면 고점 대비 -20%에서 전량 매도.")
 
-    st.markdown("**납입 스케줄**")
-    src = st.radio("소스", ["📗 내 실제 입금 기록 (자동)", "🧪 가상 패턴"],
-                   horizontal=True, key="bt_src")
+    st.markdown("**납입 스케줄** — 실제 입금 기록에서 자동 생성됩니다.")
 
-    if src == "📗 내 실제 입금 기록 (자동)":
-        auto = []
-        if not df_cash.empty and 'Type' in df_cash.columns:
-            _d = df_cash[df_cash['Type'] == 'Deposit'].copy()
-            if not _d.empty:
-                _d['Date'] = pd.to_datetime(_d['Date'], errors='coerce')
-                _d['Amount_KRW'] = pd.to_numeric(
-                    _d['Amount_KRW'].astype(str).str.replace(',', ''),
-                    errors='coerce').fillna(0)
-                _d = _d.dropna(subset=['Date'])
-                g = _d.groupby(_d['Date'].dt.strftime('%Y-%m'))['Amount_KRW'].sum()
-                auto = [f"{k}={int(v)}" for k, v in g.items() if v > 0]
-        if auto:
-            default_text = "\n".join(auto)
-            st.caption(f"✅ 입금 기록 {len(auto)}개월치를 자동으로 불러왔습니다. "
-                       f"기록 없는 달은 자동으로 '쉬는 달'로 처리됩니다.")
-            if len(auto) < 12:
-                st.warning(f"⚠️ 기록이 {len(auto)}개월치뿐이라 통계적 의미가 거의 없습니다. "
-                           f"엔진 성능을 보시려면 '가상 패턴'으로 긴 기간을 돌려보세요.")
-        else:
-            default_text = ""
-            st.warning("입금 기록이 없습니다. '가상 패턴'을 사용하세요.")
+    dep = {}
+    if not df_cash.empty and 'Type' in df_cash.columns:
+        _d = df_cash[df_cash['Type'] == 'Deposit'].copy()
+        if not _d.empty:
+            _d['Date'] = pd.to_datetime(_d['Date'], errors='coerce')
+            _d['Amount_KRW'] = pd.to_numeric(
+                _d['Amount_KRW'].astype(str).str.replace(',', ''),
+                errors='coerce').fillna(0)
+            _d = _d.dropna(subset=['Date'])
+            g = _d.groupby(_d['Date'].dt.to_period('M'))['Amount_KRW'].sum()
+            dep = {p: float(v) for p, v in g.items() if v > 0}
+
+    if not dep:
+        st.warning("입금 기록이 없습니다. 사이드바에서 입금을 먼저 기록해주세요.")
+        default_text = ""
     else:
-        g1, g2, g3, g4 = st.columns(4)
-        on_m  = g1.number_input("투자 개월", value=4, min_value=1, key="bt_on")
-        off_m = g2.number_input("휴식 개월", value=4, min_value=0, key="bt_off")
-        amt   = g3.number_input("월 납입액", value=500000, step=100000, key="bt_amt")
-        cyc   = g4.number_input("반복 횟수", value=7, min_value=1, key="bt_cyc")
-        default_text = bt_make_schedule(
-            pd.Timestamp(bt_start).strftime('%Y-%m'),
-            int(on_m), int(off_m), amt, int(cyc))
+        first_p = min(dep.keys())
+        max_span = (pd.Period(pd.Timestamp.today(), freq='M') - first_p).n + 1
+        max_span = max(int(max_span), 1)
+        n_months = st.slider("관찰 기간 (개월)", 1, max_span, max_span, key="bt_span",
+                             help="입금이 없던 달도 '0원'으로 포함합니다. 길게 잡을수록 "
+                                  "이미 넣어둔 돈이 굴러간 결과까지 반영됩니다.")
+        periods = [first_p + i for i in range(int(n_months))]
+        default_text = "\n".join(f"{p.strftime('%Y-%m')}={int(dep.get(p, 0))}" for p in periods)
+        inv_cnt = sum(1 for p in periods if dep.get(p, 0) > 0)
+        st.caption(f"✅ {first_p.strftime('%Y-%m')}부터 {int(n_months)}개월 "
+                   f"(투자 {inv_cnt}개월 + 쉰 달 {int(n_months)-inv_cnt}개월)")
+        if inv_cnt < 12:
+            st.warning(f"⚠️ 실제 투자가 {inv_cnt}개월치뿐입니다. 통계가 아니라 **참고용 스냅샷**으로만 보세요.")
 
-    sched_text = st.text_area("확인 및 수정 (YYYY-MM=금액)", value=default_text,
-                              height=160, key="bt_sched_box")
+    sched_text = st.text_area(
+        "확인 및 수정 (YYYY-MM=금액) — 여기에 과거 달을 직접 추가하면 긴 기간도 테스트 가능",
+        value=default_text, height=160, key="bt_sched_box")
+
     if st.button("🚀 백테스트 실행", type="primary", key="bt_run"):
         sched = bt_parse_schedule(sched_text)
         if not sched:
@@ -1125,54 +1137,72 @@ with tab8:
                     if df_bt.empty or len(df_bt) < 200:
                         st.error("데이터가 부족합니다. 시작일을 앞당기거나 종목을 바꿔보세요.")
                     else:
-                        h, paid, sA, sB, idle = bt_run(df_bt, sched, threshold, SPREAD_BT, 30.0)
+                        h, paid, sA, sB, sC, idle, panics = bt_run(
+                            df_bt, sched, threshold, SPREAD_BT, 30.0, panic_dd/100.0)
 
-                        diff = sB['최종 평가액'] - sA['최종 평가액']
-                        m1, m2, m3 = st.columns(3)
+                        m1, m2, m3, m4 = st.columns(4)
                         m1.metric("총 납입액", f"{int(paid):,}원")
-                        m2.metric("전략A (단순 적립식)", f"{int(sA['최종 평가액']):,}원",
+                        m2.metric("A. 단순 적립식", f"{int(sA['최종 평가액']):,}원",
                                   f"{sA['수익률(%)']:.1f}%")
-                        m3.metric("전략B (Aegis 엔진)", f"{int(sB['최종 평가액']):,}원",
+                        m3.metric("B. Aegis 엔진", f"{int(sB['최종 평가액']):,}원",
                                   f"{sB['수익률(%)']:.1f}%")
+                        m4.metric("C. 규칙 없는 인간", f"{int(sC['최종 평가액']):,}원",
+                                  f"{sC['수익률(%)']:.1f}%")
 
-                        if diff > paid * 0.01:
-                            st.success(f"✅ Aegis 엔진이 **{int(diff):,}원** 앞섰습니다 "
-                                       f"(납입액 대비 +{diff/paid*100:.2f}%p). 타이밍 효과가 있었습니다.")
-                        elif diff < -paid * 0.01:
-                            st.error(f"❌ Aegis 엔진이 **{int(-diff):,}원** 뒤졌습니다 "
-                                     f"(납입액 대비 {diff/paid*100:.2f}%p). "
-                                     f"이 구간에서 점수 엔진은 수익원이 아니라 **'안 팔게 붙잡아주는 심리 장치'**였습니다.")
+                        diff_ab = sB['최종 평가액'] - sA['최종 평가액']
+                        diff_bc = sB['최종 평가액'] - sC['최종 평가액']
+
+                        st.markdown("##### ① 타이밍 효과 (B vs A)")
+                        if abs(diff_ab) <= paid * 0.01:
+                            st.warning(f"➖ 차이 {int(diff_ab):,}원 — 사실상 동률. 타이밍 기여는 미미합니다.")
+                        elif diff_ab > 0:
+                            st.success(f"✅ Aegis가 {int(diff_ab):,}원 앞섬 (+{diff_ab/paid*100:.2f}%p). "
+                                       f"단, 매수 {sB['매수 횟수']:.0f}회 / 현금 유휴 {idle:.0f}% 를 함께 보세요.")
                         else:
-                            st.warning(f"➖ 차이 {int(diff):,}원으로 사실상 동률입니다. "
-                                       f"수익 기여는 미미하고, 실제 가치는 **행동 일관성 유지**에 있습니다.")
+                            st.error(f"❌ Aegis가 {int(-diff_ab):,}원 뒤짐 ({diff_ab/paid*100:.2f}%p).")
+
+                        st.markdown("##### ② 규칙의 가치 (B vs C)")
+                        if panics == 0:
+                            st.info(f"이 구간엔 −{panic_dd:.0f}% 급락이 없어 공포 매도가 발생하지 않았습니다. "
+                                    f"규칙의 가치는 **폭락장에서만** 측정됩니다. 시작일을 2019년이나 2021년으로 "
+                                    f"당겨 코로나·긴축 구간을 포함시켜 보세요.")
+                        elif diff_bc > 0:
+                            st.success(f"🛡️ 공포 매도 {panics}회 발생. 규칙을 지킨 덕에 "
+                                       f"**{int(diff_bc):,}원**을 지켰습니다 (납입액의 {diff_bc/paid*100:.2f}%). "
+                                       f"→ 이것이 백테스트에 잘 안 잡히던 **'안 팔게 붙잡아주는 가치'**입니다.")
+                        else:
+                            st.warning(f"공포 매도 {panics}회 발생했지만, 이 구간에선 "
+                                       f"오히려 판 쪽이 {int(-diff_bc):,}원 나았습니다.")
 
                         st.markdown("---")
-                        cmp_df = pd.DataFrame({'전략A (단순 적립식)': sA, '전략B (Aegis 엔진)': sB}).T
+                        cmp_df = pd.DataFrame({'A. 단순 적립식': sA, 'B. Aegis 엔진': sB,
+                                               'C. 규칙 없는 인간': sC}).T
                         st.dataframe(cmp_df.style.format({
                             '최종 평가액': '{:,.0f}원', '수익률(%)': '{:.2f}%',
-                            '평균 환율': '{:,.0f}원', '평균 매수단가($)': '${:,.2f}',
-                            '매수 횟수': '{:.0f}회', 'MDD(%)': '{:.1f}%'}),
+                            '평균 환율': '{:,.0f}원', '매수 횟수': '{:.0f}회',
+                            '폭락장 매수 비중(%)': '{:.1f}%', 'MDD(%)': '{:.1f}%'}),
                             use_container_width=True)
-                        st.caption(f"⏳ 전략B가 현금을 놀린 기간: 전체의 **{idle:.1f}%** "
-                                   f"(이 시간만큼 시장에서 빠져 있었습니다)")
+
+                        k1, k2 = st.columns(2)
+                        k1.metric("⏳ B가 현금을 놀린 기간", f"{idle:.1f}%",
+                                  help="이 시간만큼 시장 밖에 있었습니다. 50% 넘으면 '타이밍 전략'이 아니라 '거의 안 산 전략'입니다.")
+                        k2.metric("🎯 B의 폭락장(VIX≥25) 매수 비중", f"{sB['폭락장 매수 비중(%)']:.1f}%",
+                                  f"A: {sA['폭락장 매수 비중(%)']:.1f}%",
+                                  help="투입 금액 중 공포 구간에 넣은 비율. 높을수록 '쌀 때 줍는' 설계가 실제로 작동한 것입니다.")
 
                         long_h = h.reset_index().melt('Date', var_name='전략', value_name='평가액')
                         long_h['전략'] = long_h['전략'].map(
-                            {'A': '단순 적립식', 'B': 'Aegis 엔진'})
+                            {'A': 'A. 단순 적립식', 'B': 'B. Aegis 엔진', 'C': 'C. 규칙 없는 인간'})
                         st.altair_chart(
                             alt.Chart(long_h).mark_line().encode(
                                 x='Date:T',
                                 y=alt.Y('평가액:Q', axis=alt.Axis(format=',d')),
                                 color=alt.Color('전략:N', scale=alt.Scale(
-                                    domain=['단순 적립식', 'Aegis 엔진'],
-                                    range=['#888888', '#ff4b4b'])),
+                                    domain=['A. 단순 적립식', 'B. Aegis 엔진', 'C. 규칙 없는 인간'],
+                                    range=['#888888', '#ff4b4b', '#4b8bff'])),
                                 tooltip=['Date', '전략', '평가액']
                             ).properties(height=380).interactive(),
                             use_container_width=True)
-
-                        st.info("💡 **핵심 사용법**: 위 '투자/휴식 개월'과 '월 납입액'을 여러 번 "
-                                "바꿔가며 돌려보세요. 승패가 계속 뒤집히면 그 차이는 실력이 아니라 "
-                                "**우연**입니다. 한 번의 결과로 결론 내리지 마세요.")
                 except Exception as e:
                     st.error(f"백테스트 실패: {e}")
 
