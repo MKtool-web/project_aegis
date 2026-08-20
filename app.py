@@ -1073,23 +1073,44 @@ with tab8:
     bt_start = bc2.date_input("시작일", pd.Timestamp("2019-01-01").date(), key="bt_s")
     threshold = bc3.number_input("매수 임계점", value=100, step=5, key="bt_th")
 
-    st.markdown("**납입 스케줄** — 월급날(5일) 기준. 금액 0이면 그 달은 쉬는 달입니다.")
-    g1, g2, g3, g4 = st.columns(4)
-    on_m  = g1.number_input("투자 개월", value=4, min_value=1, key="bt_on")
-    off_m = g2.number_input("휴식 개월", value=4, min_value=0, key="bt_off")
-    amt   = g3.number_input("월 납입액", value=500000, step=100000, key="bt_amt")
-    cyc   = g4.number_input("반복 횟수", value=7, min_value=1, key="bt_cyc")
+    st.markdown("**납입 스케줄**")
+    src = st.radio("소스", ["📗 내 실제 입금 기록 (자동)", "🧪 가상 패턴"],
+                   horizontal=True, key="bt_src")
 
-    if st.button("🔄 패턴 생성", key="bt_gen"):
-        st.session_state["bt_sched"] = bt_make_schedule(
-            pd.Timestamp(bt_start).strftime('%Y-%m'), int(on_m), int(off_m), amt, int(cyc))
+    if src == "📗 내 실제 입금 기록 (자동)":
+        auto = []
+        if not df_cash.empty and 'Type' in df_cash.columns:
+            _d = df_cash[df_cash['Type'] == 'Deposit'].copy()
+            if not _d.empty:
+                _d['Date'] = pd.to_datetime(_d['Date'], errors='coerce')
+                _d['Amount_KRW'] = pd.to_numeric(
+                    _d['Amount_KRW'].astype(str).str.replace(',', ''),
+                    errors='coerce').fillna(0)
+                _d = _d.dropna(subset=['Date'])
+                g = _d.groupby(_d['Date'].dt.strftime('%Y-%m'))['Amount_KRW'].sum()
+                auto = [f"{k}={int(v)}" for k, v in g.items() if v > 0]
+        if auto:
+            default_text = "\n".join(auto)
+            st.caption(f"✅ 입금 기록 {len(auto)}개월치를 자동으로 불러왔습니다. "
+                       f"기록 없는 달은 자동으로 '쉬는 달'로 처리됩니다.")
+            if len(auto) < 12:
+                st.warning(f"⚠️ 기록이 {len(auto)}개월치뿐이라 통계적 의미가 거의 없습니다. "
+                           f"엔진 성능을 보시려면 '가상 패턴'으로 긴 기간을 돌려보세요.")
+        else:
+            default_text = ""
+            st.warning("입금 기록이 없습니다. '가상 패턴'을 사용하세요.")
+    else:
+        g1, g2, g3, g4 = st.columns(4)
+        on_m  = g1.number_input("투자 개월", value=4, min_value=1, key="bt_on")
+        off_m = g2.number_input("휴식 개월", value=4, min_value=0, key="bt_off")
+        amt   = g3.number_input("월 납입액", value=500000, step=100000, key="bt_amt")
+        cyc   = g4.number_input("반복 횟수", value=7, min_value=1, key="bt_cyc")
+        default_text = bt_make_schedule(
+            pd.Timestamp(bt_start).strftime('%Y-%m'),
+            int(on_m), int(off_m), amt, int(cyc))
 
-    sched_text = st.text_area(
-        "직접 수정 가능 (YYYY-MM=금액)",
-        value=st.session_state.get("bt_sched",
-              bt_make_schedule(pd.Timestamp(bt_start).strftime('%Y-%m'), 4, 4, 500000, 7)),
-        height=160, key="bt_sched_box")
-
+    sched_text = st.text_area("확인 및 수정 (YYYY-MM=금액)", value=default_text,
+                              height=160, key="bt_sched_box")
     if st.button("🚀 백테스트 실행", type="primary", key="bt_run"):
         sched = bt_parse_schedule(sched_text)
         if not sched:
