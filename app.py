@@ -683,27 +683,6 @@ elif mode == "🗑️ 데이터 관리":
     else: st.sidebar.caption("데이터 없음")
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("🪜 분할 환전 플래너"):
-    _kst = pytz.timezone('Asia/Seoul')
-    plan_start = st.date_input("계획 시작일", datetime.now(_kst).date(), key="plan_start")
-    total_plan = st.number_input("총 환전 계획액(원)", value=2000000, step=100000, key="plan_total")
-    tranches   = st.number_input("분할 횟수", value=3, min_value=1, max_value=10, key="plan_tranches")
-
-    done = 0.0
-    if not df_cash.empty and 'Date' in df_cash.columns and 'Type' in df_cash.columns:
-        _c = df_cash.copy()
-        _c['Date'] = pd.to_datetime(_c['Date'], errors='coerce')
-        _c['Amount_KRW'] = pd.to_numeric(
-            _c['Amount_KRW'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        done = _c[(_c['Type'] == 'Exchange') &
-                  (_c['Date'] >= pd.Timestamp(plan_start))]['Amount_KRW'].sum()
-
-    per = total_plan / tranches if tranches > 0 else 0
-    st.write(f"1회분: **{int(per):,}원**")
-    st.progress(min(1.0, done / total_plan) if total_plan > 0 else 0.0)
-    st.caption(f"집행 {int(done):,}원 / {int(total_plan):,}원 (잔여 {int(max(0, total_plan - done)):,}원)")
-    if done < total_plan:
-        st.caption(f"💡 다음 회차 목표: {int(min(per, total_plan - done)):,}원")
 if st.sidebar.button("📖 전략 가이드 보기", use_container_width=True):
     show_strategy_guide()
 if st.sidebar.button("🔔 텔레그램 테스트"): send_test_message()
