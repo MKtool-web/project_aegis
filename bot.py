@@ -441,18 +441,25 @@ def run_bot():
         CASH_CEILING_PCT = 35.0   # 달러 현금이 전체의 35%를 넘으면 과다로 판단
         usd_cash_weight = (my_usd / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
 
-        # SGOV 파킹 지시 (기존 조건 + 현금 천장 초과 시에도 발동)
+        # 🔥 SGOV 파킹 — '전액'이 아니라 '목표 비중까지만' 채운다 (즉시 되팔기 방지)
+        sgov_room_pct = dynamic_targets['SGOV'] - sgov_current_weight
+        sgov_room_usd = total_portfolio_usd * (sgov_room_pct / 100) if sgov_room_pct > 0 else 0.0
+        park_usd = min(my_usd, sgov_room_usd)
+
         if my_usd >= MIN_USD_ACTION and is_open and not should_send:
-            if usd_cash_weight > CASH_CEILING_PCT:
+            if park_usd < sgov_price:
+                pass   # 1주도 못 채울 여유면 지시하지 않음 (잔챙이 매매 방지)
+            elif usd_cash_weight > CASH_CEILING_PCT:
                 msg += f"💰 **[현금 과다 경고: SGOV 파킹 권장]**\n"
                 msg += f"• 달러 현금 비중: {usd_cash_weight:.1f}% (천장 {CASH_CEILING_PCT:.0f}% 초과)\n"
-                msg += f"• 비싼 장이 길어지며 현금이 놀고 있습니다. 이자라도 받게 파킹을 권합니다.\n"
-                msg += f"👉 남는 달러 전액 파킹\n{buy_guide(my_usd, sgov_price, 'SGOV')}\n\n"
+                msg += f"• SGOV 비중: {sgov_current_weight:.1f}% → 목표 {dynamic_targets['SGOV']:.0f}%까지만 채웁니다.\n"
+                msg += f"{buy_guide(park_usd, sgov_price, 'SGOV')}\n\n"
                 should_send = True
             elif sgov_current_weight < dynamic_targets['SGOV']:
                 msg += f"🛡️ **[SGOV 파킹 (안전 자산 충전)]**\n"
                 msg += f"• SGOV 비중: 현재 {sgov_current_weight:.1f}% (목표 {dynamic_targets['SGOV']:.0f}%)\n"
-                msg += f"👉 남은 달러 전액 파킹\n{buy_guide(my_usd, sgov_price, 'SGOV')}\n\n"
+                msg += f"• 목표선까지만 채웁니다. 남는 달러는 폭락장 실탄으로 보유.\n"
+                msg += f"{buy_guide(park_usd, sgov_price, 'SGOV')}\n\n"
                 should_send = True
 
         VOLATILITY_BUFFER = 8.0
@@ -497,7 +504,7 @@ def run_bot():
         # 🔥 자동화 4: SGOV 방어 해제 (공격 자금 장전)
         # 시장이 안정/하락장으로 접어들어 SGOV 목표 비중이 줄어들었을 때, 초과된 SGOV를 팔아 현금을 확보합니다.
         if is_open:
-            if sgov_current_weight >= (dynamic_targets['SGOV'] + VOLATILITY_BUFFER):
+            if sgov_current_weight >= (dynamic_targets['SGOV'] + VOLATILITY_BUFFER) and not should_send:
                 excess_pct = sgov_current_weight - dynamic_targets['SGOV']
                 excess_usd = total_portfolio_usd * (excess_pct / 100)
                 sgov_sell_qty = round(excess_usd / sgov_price)
