@@ -678,10 +678,10 @@ with st.sidebar.expander("🎯 포트폴리오 목표 설정", expanded=True):
         target_qld  = st.slider("QLD (전술위성)", 0, 100, ai_qld, disabled=True)
     else:
         st.caption("수동 설정 모드")
-        target_qqqm = st.slider("QQQM (성장)", 0, 100, 30, 5)
+        target_qqqm = st.slider("QQQM (성장)", 0, 100, 40, 5)
         target_spym = st.slider("SPYM (안정)", 0, 100, 30, 5)
-        target_sgov = st.slider("SGOV (방어)", 0, 100, 20, 5)
-        target_qld  = st.slider("QLD (전술위성)", 0, 100, 20, 5)
+        target_sgov = st.slider("SGOV (방어)", 0, 100, 25, 5)
+        target_qld  = st.slider("QLD (전술위성)", 0, 100, 5, 5)
         
     total_target = target_qqqm + target_spym + target_sgov + target_qld
     if total_target != 100: st.error(f"합계: {total_target}%")
