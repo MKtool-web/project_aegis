@@ -1092,14 +1092,15 @@ with tab8:
 
     dep = {}
     if not df_cash.empty and 'Type' in df_cash.columns:
-        _d = df_cash[df_cash['Type'] == 'Deposit'].copy()
+        _d = df_cash[df_cash['Type'].isin(['Deposit', 'Withdraw'])].copy()
         if not _d.empty:
             _d['Date'] = pd.to_datetime(_d['Date'], errors='coerce')
             _d['Amount_KRW'] = pd.to_numeric(
                 _d['Amount_KRW'].astype(str).str.replace(',', ''),
                 errors='coerce').fillna(0)
             _d = _d.dropna(subset=['Date'])
-            g = _d.groupby(_d['Date'].dt.to_period('M'))['Amount_KRW'].sum()
+            _d['Signed'] = _d['Amount_KRW'].where(_d['Type'] == 'Deposit', -_d['Amount_KRW'])
+            g = _d.groupby(_d['Date'].dt.to_period('M'))['Signed'].sum()
             dep = {p: float(v) for p, v in g.items() if v > 0}
 
     if not dep:
