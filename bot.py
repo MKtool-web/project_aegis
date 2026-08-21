@@ -26,14 +26,14 @@ SPREAD_RATE = 0.009
 
 # 🔥 기존의 고정 TARGET_WEIGHTS는 삭제하고, 프론트엔드와 동일한 AI 오토파일럿 로직을 장착합니다.
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
-    t_qqqm = 30; t_spym = 30; t_sgov = 40; t_qld = 0
+    t_qqqm = 40; t_spym = 30; t_sgov = 25; t_qld = 5
     
     # 진성 공포장 (Tactical Strike)
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
-        t_qqqm = 27; t_spym = 28; t_sgov = 25; t_qld = 20
+        t_qqqm = 35; t_spym = 25; t_sgov = 20; t_qld = 20
     # 지수 개편 등으로 인한 과열기 (Profit Take)
     elif q_rsi > 70 or s_rsi > 70:
-        t_qqqm = 20; t_spym = 20; t_sgov = 60; t_qld = 0
+        t_qqqm = 32; t_spym = 28; t_sgov = 40; t_qld = 0
         
     return {'QQQM': t_qqqm, 'SPYM': t_spym, 'SGOV': t_sgov, 'QLD': t_qld, 'GMMF': 0.0}
 
@@ -419,11 +419,16 @@ def run_bot():
         # 🔥 진성 폭락장 직관적 매수 지시 (VIX 트리거)
         if my_usd >= MIN_USD_ACTION and (is_open or vix > 30) and not should_send:
             trend_note = "\n📉 하락 추세(200일선 아래): 강도 절반으로 분할 진입" if is_downtrend else ""
-            if vix >= 25 and qld_rsi < 35:
+            QLD_HARD_CAP = 30.0   # QLD가 전체의 30%를 넘으면 추가 매수 중단
+            if vix >= 25 and qld_rsi < 35 and qld_current_weight < QLD_HARD_CAP:
                 qld_pct = 25 if is_downtrend else 50
-                budget = my_usd * (qld_pct / 100)
-                msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장){trend_note}\n👉 위성 자금의 {qld_pct}% 투입\n{buy_guide(budget, qld_price, 'QLD')}\n\n"
-                should_send = True
+                room_usd = total_portfolio_usd * ((QLD_HARD_CAP - qld_current_weight) / 100)
+                budget = min(my_usd * (qld_pct / 100), room_usd)
+                if budget >= qld_price:
+                    msg += f"🎯 **[전술적 타격: QLD 줍줍]**\n• 듀얼 검증: VIX {vix:.1f} 폭등 (진성 공포장){trend_note}\n"
+                    msg += f"• QLD 비중: {qld_current_weight:.1f}% (상한 {QLD_HARD_CAP:.0f}%)\n"
+                    msg += f"👉 위성 자금의 {qld_pct}% 투입\n{buy_guide(budget, qld_price, 'QLD')}\n\n"
+                    should_send = True
             elif qqqm_rsi < 40 and vix >= 18:
                 base_pct = 30 if qqqm_rsi >= 30 else 50
                 final_pct = int(base_pct * trend_factor)
