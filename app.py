@@ -964,10 +964,13 @@ with tab3:
             elif row['종목'] == 'QLD': rsi_val = qld_rsi
             else: rsi_val = 50 
             
+            _dry_krw = my_krw + wallet_data['USD'] * krw_rate
+            _fx_exp = (my_krw / _dry_krw) if _dry_krw > 0 else 1.0
             master_score = calculate_aegis_master_score(
                 row['종목'], get_current_price(row['종목']), rsi_val, vix_val, ma200, 
                 krw_rate, my_avg_exchange, krw_ma60, dxy_curr, dxy_ma20, 
-                row['Target_%'], row['Current_%'], my_krw
+                row['Target_%'], row['Current_%'], my_krw,
+                dry_powder_krw=_dry_krw, fx_exposure=_fx_exp
             )
             
             c_i, c_a = st.columns([2, 1])
