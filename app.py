@@ -355,7 +355,7 @@ def calculate_history(df_stock, df_cash):
     return pd.DataFrame(history)
 
 # 🔥 [방안 C 적용] 최신 V26.5 마스터 스코어 
-def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw, sim_day=None):
+def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, target_weight, current_weight, my_krw, sim_day=None, dry_powder_krw=None, fx_exposure=1.0):
     score = 0.0
     
     score_A = 0
