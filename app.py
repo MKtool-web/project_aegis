@@ -49,8 +49,11 @@ def send_test_message():
 def get_current_price(ticker):
     try:
         hist = yf.Ticker(ticker).history(period="5d")
-        if not hist.empty: return float(hist['Close'].iloc[-1])
-        return 0.0
+        if hist.empty: return 0.0
+        s = hist['Close'].dropna()
+        if s.empty: return 0.0
+        v = float(s.iloc[-1])
+        return v if v > 0 else 0.0
     except: return 0.0
 
 @st.cache_data(ttl=300)
@@ -60,7 +63,11 @@ def get_usd_krw():
         try: 
             df = yf.Ticker("KRW=X").history(period="5d")
             if df.empty: raise ValueError
-            return float(df['Close'].iloc[-1])
+            s = df['Close'].dropna()
+            if s.empty: raise ValueError
+            v = float(s.iloc[-1])
+            if v <= 0: raise ValueError
+            return v
         except:
             if attempt < max_retries - 1:
                 time.sleep(1.0) 
@@ -76,7 +83,10 @@ def get_market_analysis(ticker):
         df = yf.Ticker(ticker).history(period="2mo")
         if len(df) < 14: return 0, 0, pd.DataFrame()
         df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-        return df['Close'].iloc[-1], df['RSI'].iloc[-1], df
+        px = df['Close'].dropna()
+        rs = df['RSI'].dropna()
+        if px.empty: return 0, 0, pd.DataFrame()
+        return float(px.iloc[-1]), (float(rs.iloc[-1]) if not rs.empty else 50.0), df
     except: return 0, 0, pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -813,7 +823,7 @@ if not df_stock.empty and 'Action' in df_stock.columns:
     for t, q in current_holdings.items():
         if q > 0:
             p = get_current_price(t)
-            if p == 0:
+            if p == 0 or pd.isna(p):
                 st.warning(f"⚠️ {t} 가격을 못 불러왔습니다. 이 종목은 자산 계산에서 잠시 제외합니다.")
                 continue
             val_krw = q * p * krw_rate
