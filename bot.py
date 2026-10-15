@@ -162,6 +162,9 @@ def get_market_data_safe(ticker, period="2mo"):
         try:
             df = yf.Ticker(ticker).history(period=period)
             if df.empty: raise ValueError(f"{ticker} 데이터 없음")
+            if pd.isna(df['Close'].iloc[-1]):
+                df = df[df['Close'].notna()]
+                if df.empty: raise ValueError(f"{ticker} 종가 전부 NaN")
             return df
         except Exception as e:
             if attempt < max_retries - 1:
