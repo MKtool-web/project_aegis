@@ -346,10 +346,19 @@ def run_bot():
         qld_1y = get_market_data_safe("QLD", "1y")
         qld_ma200 = qld_1y['Close'].tail(200).mean() if len(qld_1y) >= 200 else qld_price
 
+
+        # 🔥 실탄(dry powder) 집계 — 아직 주식이 안 된 돈 전체를 Score C의 연료로 삼는다
+        excess_sgov_usd = max(0.0, (sgov_current_weight - dynamic_targets['SGOV'])
+                              / 100 * total_portfolio_usd)
+        dry_usd = my_usd + excess_sgov_usd
+        dry_krw_total = my_krw + dry_usd * curr_rate
+        # 환율 요소(D/F)는 '실제로 환전이 필요한 비율'만큼만 적용
+        fx_exp = (my_krw / dry_krw_total) if dry_krw_total > 0 else 1.0
+        
         # 🔥 자동화 1: 봇이 모든 종목의 마스터 스코어를 똑같이 계산
-        qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QQQM'], qqqm_current_weight, my_krw)
-        spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['SPYM'], spym_current_weight, my_krw)
-        qld_score = calculate_aegis_master_score("QLD", qld_price, qld_rsi, vix, qld_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QLD'], qld_current_weight, my_krw)
+        qqqm_score = calculate_aegis_master_score("QQQM", qqqm_price, qqqm_rsi, vix, qqqm_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QQQM'], qqqm_current_weight, my_krw, dry_powder_krw=dry_krw_total, fx_exposure=fx_exp)
+        spym_score = calculate_aegis_master_score("SPYM", spym_price, spym_rsi, vix, spym_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['SPYM'], spym_current_weight, my_krw, dry_powder_krw=dry_krw_total, fx_exposure=fx_exp)
+        qld_score = calculate_aegis_master_score("QLD", qld_price, qld_rsi, vix, qld_ma200, curr_rate, my_avg_rate, krw_ma60, dxy_curr, dxy_ma20, dynamic_targets['QLD'], qld_current_weight, my_krw, dry_powder_krw=dry_krw_total, fx_exposure=fx_exp)
 
         real_buy_rate = curr_rate * (1 + SPREAD_RATE)  
         real_sell_rate = curr_rate * (1 - SPREAD_RATE) 
@@ -381,6 +390,13 @@ def run_bot():
                 budget = my_usd * pacing_ratio
                 target_price = {'QQQM': qqqm_price, 'SPYM': spym_price, 'QLD': qld_price}[target_ticker]
                 msg += f"📈 **[전략적 긴급 매수]** 최고점({max_score:.0f}점) 돌파!\n👉 달러의 {pacing_ratio*100:.0f}% 투입\n{buy_guide(budget, target_price, target_ticker)}\n\n"
+                should_send = True
+            elif excess_sgov_usd >= sgov_price and is_open:
+                need_qty = int(excess_sgov_usd // sgov_price)
+                target_price = {'QQQM': qqqm_price, 'SPYM': spym_price, 'QLD': qld_price}[target_ticker]
+                msg += f"⚔️ **[실탄 전환]** 최고점({max_score:.0f}점) 돌파, 달러 현금 부족\n"
+                msg += f"👉 SGOV **{need_qty}주** 매도 → 확보한 달러로 **{target_ticker}** 매수\n"
+                msg += f"{buy_guide(need_qty * sgov_price, target_price, target_ticker)}\n\n"
                 should_send = True
 
         fx = get_fx_trend(ex_df)
