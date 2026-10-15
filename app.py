@@ -97,7 +97,7 @@ def get_vix_data():
     except: return 0, pd.DataFrame()
 
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
-    mode = "Normal"; t_qqqm = 40; t_spym = 30; t_sgov = 25; t_qld = 5
+    mode = "Normal"; t_qqqm = 45; t_spym = 30; t_sgov = 25; t_qld = 0
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
         mode = "Fear (Tactical Strike)"; t_qqqm = 35; t_spym = 25; t_sgov = 20; t_qld = 20
     elif q_rsi > 70 or s_rsi > 70:
