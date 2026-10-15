@@ -26,7 +26,7 @@ SPREAD_RATE = 0.009
 
 # 🔥 기존의 고정 TARGET_WEIGHTS는 삭제하고, 프론트엔드와 동일한 AI 오토파일럿 로직을 장착합니다.
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
-    t_qqqm = 40; t_spym = 30; t_sgov = 25; t_qld = 5
+    t_qqqm = 45; t_spym = 30; t_sgov = 25; t_qld = 0
     
     # 진성 공포장 (Tactical Strike)
     if vix > 30 or (q_rsi < 30 and vix >= 18) or (s_rsi < 30 and vix >= 18):
