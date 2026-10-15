@@ -248,13 +248,13 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
     if dxy_curr > dxy_ma20:
         score_D = score_D * 0.5
 
-    score -= min(score_D, 50)
+    score -= min(score_D, 50) * fx_exposure
 
     # 🔥 Score F: 저환율 보너스 (상한 15점)
     score_F = 0
     if curr_rate < blended_base_rate:
         score_F = min((blended_base_rate - curr_rate) * 0.25, 15)
-    score += score_F
+    score += score_F * fx_exposure
     # 🔥 Score E: 과열 페널티 (비싼 장에서 줍줍 방지)
     # RSI가 낮은 폭락장에서는 0이라, 공포매수는 그대로 살아있음
     score_E = 0
