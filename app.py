@@ -380,11 +380,10 @@ def calculate_aegis_master_score(ticker, current_price, rsi, vix, ma200, curr_ra
     today = sim_day if sim_day is not None else datetime.now(kst).day
     days_passed = (today - 5) if today >= 5 else (today + 30 - 5)
     
-    if my_krw >= 100000:
-        # 현금이 많을수록 하루당 점수가 부드럽게 증가 (60만원에서 최대 1.8)
-        rate_per_day = 0.8 + min(1.0, (my_krw - 100000) / 500000) * 1.0
+    fuel = my_krw if dry_powder_krw is None else dry_powder_krw
+    if fuel >= 100000:
+        rate_per_day = 0.8 + min(1.0, (fuel - 100000) / 500000) * 1.0
         score_C = days_passed * rate_per_day
-        
     score += min(score_C, 50)
     
     score_D = 0
