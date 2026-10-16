@@ -459,7 +459,32 @@ def run_bot():
                 budget = my_usd * (spym_pct / 100)
                 msg += f"🛡️ **[진성 하락장: SPYM 매수]**\n• 듀얼 검증: VIX {vix:.1f} 돌파{trend_note}\n👉 달러의 {spym_pct}% 투입\n{buy_guide(budget, spym_price, 'SPYM')}\n\n"
                 should_send = True
-                
+
+        # 🔥 평시 비중 보충 매수 — 폭락을 기다리다 현금이 놀지 않도록, 목표 미달분을 채운다
+        REBAL_GAP_TRIGGER = 10.0   # 목표보다 10%p 이상 미달해야 발동 (잔챙이 매매 방지)
+
+        if my_usd >= MIN_USD_ACTION and is_open and not should_send:
+            cand = {
+                'QQQM': (qqqm_current_weight, dynamic_targets['QQQM'], qqqm_price, qqqm_rsi),
+                'SPYM': (spym_current_weight, dynamic_targets['SPYM'], spym_price, spym_rsi),
+            }
+            best_t, best_gap = None, 0.0
+            for t, (cw, tw, px, rs) in cand.items():
+                g = tw - cw
+                if g > best_gap and g >= REBAL_GAP_TRIGGER and rs <= 70 and px > 0:
+                    best_t, best_gap = t, g
+
+            if best_t:
+                cw, tw, px, rs = cand[best_t]
+                gap_usd = total_portfolio_usd * (best_gap / 100)
+                budget = min(my_usd, gap_usd)      # 목표를 넘겨 사지 않음
+                if budget >= px:
+                    msg += f"⚖️ **[비중 보충 매수]** 현금이 놀고 있습니다\n"
+                    msg += f"• {best_t} 비중: 현재 {cw:.1f}% → 목표 {tw:.0f}% ({best_gap:.1f}%p 미달)\n"
+                    msg += f"• RSI {rs:.1f} (과열 아님) / 목표선까지만 채웁니다\n"
+                    msg += f"{buy_guide(budget, px, best_t)}\n\n"
+                    should_send = True
+        
         # 🔥 현금 천장: 달러 현금이 포트폴리오의 일정 비율을 넘으면 경고 (현금이 노는 것 방지)
         CASH_CEILING_PCT = 35.0   # 달러 현금이 전체의 35%를 넘으면 과다로 판단
         usd_cash_weight = (my_usd / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0
