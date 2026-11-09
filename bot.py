@@ -415,7 +415,14 @@ def run_bot():
                     strategy_msg += "\n⚠️ 하락 추세 진행 중 → 강도 절반 분할"
                 elif fx['stabilizing']:
                     strategy_msg += "\n✅ 5일 변동 축소(바닥 다지기) → 정상 강도"
-
+                        # 환율이 평균 근처에서 횡보해도 원화가 무한정 묶이지 않게 (시간 압박)
+            if suggest_percent == 0 and gap_vs_ma60 <= 5 and my_krw >= 500000:
+                kst_now = datetime.now(pytz.timezone('Asia/Seoul'))
+                if kst_now.day >= 20:
+                    suggest_percent = 25
+                    strategy_msg = (f"⏳ 환율이 60일 평균 부근({gap_vs_ma60:+.0f}원)에서 횡보 중입니다.\n"
+                                    f"특별히 싸진 않지만, 원화가 계속 노는 것도 비용입니다.")
+                    
             if 0 < my_krw <= 300000 and suggest_percent > 0:
                 suggest_percent = 100
                 strategy_msg += "\n💡 잔액 소액 → 분할 실익 없어 전액 집행"
