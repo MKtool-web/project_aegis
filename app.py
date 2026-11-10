@@ -93,7 +93,10 @@ def get_market_analysis(ticker):
 def get_vix_data():
     try:
         df = yf.Ticker("^VIX").history(period="2mo")
-        return df['Close'].iloc[-1], df
+        if df.empty: return 0, pd.DataFrame()
+        s = df['Close'].dropna()
+        if s.empty: return 0, pd.DataFrame()
+        return float(s.iloc[-1]), df
     except: return 0, pd.DataFrame()
 
 def get_ai_target_ratios(vix, q_rsi, s_rsi):
